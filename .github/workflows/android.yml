@@ -1,4 +1,5 @@
 name: android
+# Builds AmpliOwner-N.apk and publishes it as release build-N.
 on:
   push:
     branches: [main, "claude/**"]
