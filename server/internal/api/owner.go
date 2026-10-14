@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vikash-parashar/ampli-owner/server/internal/store"
+	"github.com/vikash-parashar/ampli_owner/server/internal/store"
 )
 
 var ticketStatuses = []string{"new", "waiting_on_owner", "waiting_on_user", "planned", "in_progress", "fixed", "closed"}

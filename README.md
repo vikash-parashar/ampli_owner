@@ -1,4 +1,4 @@
-# Ampli Owner
+# Ampli Owner (ampli_owner)
 
 The owner's console for Ampli Tech: one place for sales, downloads, revenue, user feedback,
 support tickets, bugs, feature requests, ad campaigns, the launch checklist, to-dos and the roadmap

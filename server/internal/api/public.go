@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vikash-parashar/ampli-owner/server/internal/store"
+	"github.com/vikash-parashar/ampli_owner/server/internal/store"
 )
 
 // Report is what the product apps send; see in-app-hook-spec.md.

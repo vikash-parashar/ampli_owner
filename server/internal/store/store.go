@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/vikash-parashar/ampli-owner/server/migrations"
+	"github.com/vikash-parashar/ampli_owner/server/migrations"
 )
 
 var ErrNotFound = errors.New("not found")

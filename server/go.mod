@@ -1,4 +1,4 @@
-module github.com/vikash-parashar/ampli-owner/server
+module github.com/vikash-parashar/ampli_owner/server
 
 go 1.24.7
 

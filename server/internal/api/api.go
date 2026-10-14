@@ -13,7 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/vikash-parashar/ampli-owner/server/internal/store"
+	"github.com/vikash-parashar/ampli_owner/server/internal/store"
 )
 
 // ReportsPerDay is how many reports one install may file in 24 hours.

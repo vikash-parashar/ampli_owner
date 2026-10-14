@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vikash-parashar/ampli-owner/server/internal/api"
-	"github.com/vikash-parashar/ampli-owner/server/internal/store"
+	"github.com/vikash-parashar/ampli_owner/server/internal/api"
+	"github.com/vikash-parashar/ampli_owner/server/internal/store"
 )
 
 const token = "test-owner-token-0123456789abcdef"
