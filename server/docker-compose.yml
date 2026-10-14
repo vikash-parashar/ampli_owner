@@ -1,0 +1,25 @@
+# Local stack: `docker compose up --build`, then import the checklist once:
+#   docker compose run --rm api seed /seed
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ampli
+      POSTGRES_PASSWORD: ampli
+      POSTGRES_DB: ampli_owner
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ampli"]
+      interval: 2s
+      retries: 20
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgres://ampli:ampli@db:5432/ampli_owner?sslmode=disable
+      OWNER_TOKEN: ${OWNER_TOKEN:-local-dev-owner-token-change-me}
+    ports: ["8080:8080"]
+    depends_on:
+      db: { condition: service_healthy }
+volumes:
+  pgdata:

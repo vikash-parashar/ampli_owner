@@ -1,0 +1,418 @@
+[
+ {
+  "id": 1,
+  "product": "mp3",
+  "title": "Local library, search, favorites",
+  "state": "built",
+  "build": "",
+  "order": 10
+ },
+ {
+  "id": 2,
+  "product": "mp3",
+  "title": "Smart playlists, own playlists, multi-select",
+  "state": "built",
+  "build": "",
+  "order": 20
+ },
+ {
+  "id": 3,
+  "product": "mp3",
+  "title": "Listening stats + share",
+  "state": "built",
+  "build": "",
+  "order": 30
+ },
+ {
+  "id": 4,
+  "product": "mp3",
+  "title": "Per-device EQ, speed/pitch, A-B repeat",
+  "state": "built",
+  "build": "",
+  "order": 40
+ },
+ {
+  "id": 5,
+  "product": "mp3",
+  "title": "Even volume (ReplayGain)",
+  "state": "built",
+  "build": "",
+  "order": 50
+ },
+ {
+  "id": 6,
+  "product": "mp3",
+  "title": "Crossfade, sleep at end of song",
+  "state": "built",
+  "build": "",
+  "order": 60
+ },
+ {
+  "id": 7,
+  "product": "mp3",
+  "title": "Multiple queues, swipe to play next",
+  "state": "built",
+  "build": "",
+  "order": 70
+ },
+ {
+  "id": 8,
+  "product": "mp3",
+  "title": "Home-screen widget",
+  "state": "built",
+  "build": "",
+  "order": 80
+ },
+ {
+  "id": 9,
+  "product": "mp3",
+  "title": "Wi-Fi transfer from laptop",
+  "state": "built",
+  "build": "",
+  "order": 90
+ },
+ {
+  "id": 10,
+  "product": "mp3",
+  "title": "Tag editor, duplicate finder, delete songs",
+  "state": "built",
+  "build": "",
+  "order": 100
+ },
+ {
+  "id": 11,
+  "product": "mp3",
+  "title": "Local lyrics (.lrc / embedded)",
+  "state": "built",
+  "build": "",
+  "order": 110
+ },
+ {
+  "id": 12,
+  "product": "mp3",
+  "title": "Car mode with voice search",
+  "state": "built",
+  "build": "",
+  "order": 120
+ },
+ {
+  "id": 13,
+  "product": "mp3",
+  "title": "Ringtone maker",
+  "state": "built",
+  "build": "",
+  "order": 130
+ },
+ {
+  "id": 14,
+  "product": "mp3",
+  "title": "Videos tab (Pro player)",
+  "state": "built",
+  "build": "",
+  "order": 140
+ },
+ {
+  "id": 15,
+  "product": "mp3",
+  "title": "Chromecast (Pro)",
+  "state": "built",
+  "build": "",
+  "order": 150
+ },
+ {
+  "id": 16,
+  "product": "mp3",
+  "title": "Backup / restore",
+  "state": "built",
+  "build": "",
+  "order": 160
+ },
+ {
+  "id": 17,
+  "product": "mp3",
+  "title": "Hindi UI",
+  "state": "built",
+  "build": "",
+  "order": 170
+ },
+ {
+  "id": 18,
+  "product": "mp3",
+  "title": "Pro paywall screen (Rs 199)",
+  "state": "built",
+  "build": "",
+  "order": 180
+ },
+ {
+  "id": 19,
+  "product": "mp3",
+  "title": "Final style D icon",
+  "state": "built",
+  "build": "",
+  "order": 190
+ },
+ {
+  "id": 20,
+  "product": "mp3",
+  "title": "Name that song needs the AudD key",
+  "state": "left",
+  "build": "",
+  "order": 10
+ },
+ {
+  "id": 21,
+  "product": "mp3",
+  "title": "Online search needs a music licence decision",
+  "state": "left",
+  "build": "",
+  "order": 20
+ },
+ {
+  "id": 22,
+  "product": "mp3",
+  "title": "Hindi text needs a native check",
+  "state": "left",
+  "build": "",
+  "order": 30
+ },
+ {
+  "id": 23,
+  "product": "mp3",
+  "title": "More languages: Tamil, Telugu, Bengali",
+  "state": "left",
+  "build": "",
+  "order": 40
+ },
+ {
+  "id": 24,
+  "product": "mp3",
+  "title": "Android Auto voice",
+  "state": "left",
+  "build": "",
+  "order": 50
+ },
+ {
+  "id": 25,
+  "product": "mp3",
+  "title": "Signed release build (AAB) in CI",
+  "state": "left",
+  "build": "",
+  "order": 60
+ },
+ {
+  "id": 26,
+  "product": "mp3",
+  "title": "Remove the test 'unlock Pro' switch",
+  "state": "left",
+  "build": "",
+  "order": 70
+ },
+ {
+  "id": 27,
+  "product": "mp3",
+  "title": "Report a bug / request a feature screen",
+  "state": "left",
+  "build": "",
+  "order": 80
+ },
+ {
+  "id": 28,
+  "product": "carhub",
+  "title": "3-pane home: map, speed, music",
+  "state": "built",
+  "build": "",
+  "order": 10
+ },
+ {
+  "id": 29,
+  "product": "carhub",
+  "title": "Free OSM map + Google Maps handoff",
+  "state": "built",
+  "build": "",
+  "order": 20
+ },
+ {
+  "id": 30,
+  "product": "carhub",
+  "title": "19 themes incl. 6 glass themes",
+  "state": "built",
+  "build": "",
+  "order": 30
+ },
+ {
+  "id": 31,
+  "product": "carhub",
+  "title": "~20 languages",
+  "state": "built",
+  "build": "",
+  "order": 40
+ },
+ {
+  "id": 32,
+  "product": "carhub",
+  "title": "FASTag balance and toll pop-ups",
+  "state": "built",
+  "build": "",
+  "order": 50
+ },
+ {
+  "id": 33,
+  "product": "carhub",
+  "title": "Help button + SOS",
+  "state": "built",
+  "build": "",
+  "order": 60
+ },
+ {
+  "id": 34,
+  "product": "carhub",
+  "title": "\"Hey Ampli\" offline voice",
+  "state": "built",
+  "build": "",
+  "order": 70
+ },
+ {
+  "id": 35,
+  "product": "carhub",
+  "title": "Speed camera alerts (512 cameras)",
+  "state": "built",
+  "build": "",
+  "order": 80
+ },
+ {
+  "id": 36,
+  "product": "carhub",
+  "title": "Car pack: break reminder, papers, expenses",
+  "state": "built",
+  "build": "",
+  "order": 90
+ },
+ {
+  "id": 37,
+  "product": "carhub",
+  "title": "Crash detect into SOS",
+  "state": "built",
+  "build": "",
+  "order": 100
+ },
+ {
+  "id": 38,
+  "product": "carhub",
+  "title": "Where's my car, route weather",
+  "state": "built",
+  "build": "",
+  "order": 110
+ },
+ {
+  "id": 39,
+  "product": "carhub",
+  "title": "OBD-II and tyre pressure (Pro)",
+  "state": "built",
+  "build": "",
+  "order": 120
+ },
+ {
+  "id": 40,
+  "product": "carhub",
+  "title": "Final style D icon",
+  "state": "built",
+  "build": "",
+  "order": 130
+ },
+ {
+  "id": 41,
+  "product": "carhub",
+  "title": "Custom \"Hey Ampli\" wake-word model",
+  "state": "left",
+  "build": "",
+  "order": 10
+ },
+ {
+  "id": 42,
+  "product": "carhub",
+  "title": "Own place-search server",
+  "state": "left",
+  "build": "",
+  "order": 20
+ },
+ {
+  "id": 43,
+  "product": "carhub",
+  "title": "Native-speaker check of languages",
+  "state": "left",
+  "build": "",
+  "order": 30
+ },
+ {
+  "id": 44,
+  "product": "carhub",
+  "title": "Car pack test on a real head unit",
+  "state": "left",
+  "build": "",
+  "order": 40
+ },
+ {
+  "id": 45,
+  "product": "carhub",
+  "title": "Lawyer check before launch",
+  "state": "left",
+  "build": "",
+  "order": 50
+ },
+ {
+  "id": 46,
+  "product": "carhub",
+  "title": "Play Protect warning (notification access)",
+  "state": "left",
+  "build": "",
+  "order": 60
+ },
+ {
+  "id": 47,
+  "product": "carhub",
+  "title": "Signed release build (AAB) in CI",
+  "state": "left",
+  "build": "",
+  "order": 70
+ },
+ {
+  "id": 48,
+  "product": "carhub",
+  "title": "Report a bug / request a feature screen",
+  "state": "left",
+  "build": "",
+  "order": 80
+ },
+ {
+  "id": 49,
+  "product": "mp3",
+  "title": "Tamil / Telugu / Bengali UI",
+  "state": "next",
+  "build": "",
+  "order": 10
+ },
+ {
+  "id": 50,
+  "product": "carhub",
+  "title": "Petrol pumps on the map",
+  "state": "next",
+  "build": "",
+  "order": 20
+ },
+ {
+  "id": 51,
+  "product": "mp3",
+  "title": "Android Auto voice",
+  "state": "later",
+  "build": "",
+  "order": 30
+ },
+ {
+  "id": 52,
+  "product": "mp3",
+  "title": "Ampli Convert (own video to MP3)",
+  "state": "later",
+  "build": "",
+  "order": 40
+ }
+]

@@ -1,0 +1,962 @@
+[
+ {
+  "id": "ampli-core-app",
+  "phase": "Build & test",
+  "title": "Ampli app core features built",
+  "detail": "Local music, Jamendo search, favorites, day/night, videos tab, Pro gating, progress bars, lock screen and Android Auto controls",
+  "products": [
+   "Ampli"
+  ],
+  "status": "done",
+  "link": "",
+  "order": 0
+ },
+ {
+  "id": "ci-test-apks",
+  "phase": "Build & test",
+  "title": "Test APKs via GitHub Actions",
+  "detail": "CI pipeline produces installable test builds",
+  "products": [
+   "All"
+  ],
+  "status": "done",
+  "link": "",
+  "order": 1
+ },
+ {
+  "id": "ci-release-aab",
+  "phase": "Build & test",
+  "title": "Signed release AAB in CI",
+  "detail": "Add upload keystore as base64 secret plus passwords; build bundleRelease; never commit keystore",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://developer.android.com/studio/publish/app-signing",
+  "order": 2
+ },
+ {
+  "id": "upload-key-backup",
+  "phase": "Build & test",
+  "title": "Back up upload keystore offline",
+  "detail": "Encrypted USB plus password manager; record alias and passwords",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/9842756",
+  "order": 3
+ },
+ {
+  "id": "target-api",
+  "phase": "Build & test",
+  "title": "Meet target API level",
+  "detail": "Set targetSdk to the currently required level before upload",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/11926878",
+  "order": 4
+ },
+ {
+  "id": "play-billing",
+  "phase": "Build & test",
+  "title": "Integrate Play Billing for Pro",
+  "detail": "Query, purchase, acknowledge within 3 days, restore on reinstall",
+  "products": [
+   "All"
+  ],
+  "status": "in-progress",
+  "link": "https://developer.android.com/google/play/billing/integrate",
+  "order": 5
+ },
+ {
+  "id": "music-licence",
+  "phase": "Build & test",
+  "title": "Fix online music licence",
+  "detail": "Jamendo API is non-commercial; buy Jamendo commercial licence or switch to Internet Archive CC items with attribution",
+  "products": [
+   "Ampli"
+  ],
+  "status": "todo",
+  "link": "https://devportal.jamendo.com/",
+  "order": 6
+ },
+ {
+  "id": "audd-key",
+  "phase": "Build & test",
+  "title": "Song recognition API key",
+  "detail": "Get paid AudD API key and keep it off the client if possible",
+  "products": [
+   "Ampli"
+  ],
+  "status": "todo",
+  "link": "https://audd.io/",
+  "order": 7
+ },
+ {
+  "id": "drive-mvp",
+  "phase": "Build & test",
+  "title": "Ampli Drive MVP",
+  "detail": "Launcher home, media, navigation shortcuts, notification access, Pro gating",
+  "products": [
+   "Ampli Drive"
+  ],
+  "status": "in-progress",
+  "link": "",
+  "order": 8
+ },
+ {
+  "id": "speed-camera-data",
+  "phase": "Build & test",
+  "title": "Speed camera data source",
+  "detail": "Pick a licensed source (e.g. OSM ODbL with attribution); add safety disclaimer",
+  "products": [
+   "Ampli Drive"
+  ],
+  "status": "todo",
+  "link": "https://www.openstreetmap.org/copyright",
+  "order": 9
+ },
+ {
+  "id": "fgs-types",
+  "phase": "Build & test",
+  "title": "Declare foreground service types",
+  "detail": "mediaPlayback for Ampli; location or others for Drive; matching permissions in manifest",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://developer.android.com/develop/background-work/services/fgs/declare",
+  "order": 10
+ },
+ {
+  "id": "prominent-disclosures",
+  "phase": "Build & test",
+  "title": "In-app permission disclosures",
+  "detail": "Explain notification listener and location before requesting",
+  "products": [
+   "Ampli Drive"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/9799150",
+  "order": 11
+ },
+ {
+  "id": "ump-consent",
+  "phase": "Build & test",
+  "title": "Integrate UMP consent SDK",
+  "detail": "Show consent form before loading ads in EEA/UK and US states",
+  "products": [
+   "Ampli"
+  ],
+  "status": "todo",
+  "link": "https://developers.google.com/admob/android/privacy",
+  "order": 12
+ },
+ {
+  "id": "pro-removes-ads",
+  "phase": "Build & test",
+  "title": "Pro entitlement disables ads",
+  "detail": "Gate all ad loads on ampli_pro ownership",
+  "products": [
+   "Ampli"
+  ],
+  "status": "todo",
+  "link": "",
+  "order": 13
+ },
+ {
+  "id": "structure-decision",
+  "phase": "Company & legal",
+  "title": "Choose structure: sole proprietor now",
+  "detail": "Run under own PAN; incorporate Pvt Ltd later when revenue or hiring justify",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://www.mca.gov.in/",
+  "order": 14
+ },
+ {
+  "id": "pan-aadhaar-link",
+  "phase": "Company & legal",
+  "title": "Confirm PAN is linked to Aadhaar",
+  "detail": "Google verifies this for individual payments profiles",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://www.incometax.gov.in/",
+  "order": 15
+ },
+ {
+  "id": "udyam",
+  "phase": "Company & legal",
+  "title": "Udyam (MSME) registration",
+  "detail": "Free Aadhaar-based registration as Ampli, micro enterprise, services",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://udyamregistration.gov.in/",
+  "order": 16
+ },
+ {
+  "id": "shop-establishment",
+  "phase": "Company & legal",
+  "title": "Shop and Establishment licence if needed",
+  "detail": "Check state rules; some banks ask for it for proprietorship accounts",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "",
+  "order": 17
+ },
+ {
+  "id": "ca-engage",
+  "phase": "Company & legal",
+  "title": "Engage a Chartered Accountant",
+  "detail": "Decide GST, ITR form, presumptive vs books; budget 5-15k INR per year",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "",
+  "order": 18
+ },
+ {
+  "id": "incorporate-later",
+  "phase": "Company & legal",
+  "title": "Plan Pvt Ltd conversion trigger",
+  "detail": "Incorporate at about 10-20 lakh revenue, hiring or funding; then transfer apps and assign TM",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://www.mca.gov.in/content/mca/global/en/mca/e-filing/incorporation.html",
+  "order": 19
+ },
+ {
+  "id": "dpdp-compliance",
+  "phase": "Company & legal",
+  "title": "DPDP Act basics",
+  "detail": "Consent notice, withdrawal, grievance contact in privacy policy",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://www.meity.gov.in/",
+  "order": 20
+ },
+ {
+  "id": "current-account",
+  "phase": "Money",
+  "title": "Open current account in business name",
+  "detail": "Needs PAN, Aadhaar, Udyam and GST or Shop licence; get SWIFT code and e-FIRA access",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "",
+  "order": 21
+ },
+ {
+  "id": "gst-decision",
+  "phase": "Money",
+  "title": "Decide on GST registration",
+  "detail": "Below 20 lakh may be exempt (Notification 65/2017); voluntary registration eases TCS credit; CA to confirm",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://www.gst.gov.in/",
+  "order": 22
+ },
+ {
+  "id": "gst-lut",
+  "phase": "Money",
+  "title": "File GST LUT if registered",
+  "detail": "Export of services (foreign Play buyers, AdMob) without paying IGST",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://www.gst.gov.in/",
+  "order": 23
+ },
+ {
+  "id": "gstin-to-google",
+  "phase": "Money",
+  "title": "Add GSTIN to Google payments profile",
+  "detail": "Required by law if you are GST registered",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/paymentscenter/answer/7421525?hl=en-IN",
+  "order": 24
+ },
+ {
+  "id": "tds-tcs-tracking",
+  "phase": "Money",
+  "title": "Track Google TDS and GST TCS credits",
+  "detail": "Reconcile Form 26AS/AIS and GST ledger monthly",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/paymentscenter/answer/15152449?hl=en-IN",
+  "order": 25
+ },
+ {
+  "id": "firc-records",
+  "phase": "Money",
+  "title": "Collect FIRC/FIRA per inward payment",
+  "detail": "Request via Google payments centre and bank; keep for GST and FEMA",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/paymentscenter/answer/7421525?hl=en-IN",
+  "order": 26
+ },
+ {
+  "id": "advance-tax",
+  "phase": "Money",
+  "title": "Pay advance tax",
+  "detail": "If liability over 10,000 INR; presumptive filers pay by 15 March",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://www.incometax.gov.in/",
+  "order": 27
+ },
+ {
+  "id": "itr-filing",
+  "phase": "Money",
+  "title": "File income tax return",
+  "detail": "ITR-4 presumptive (Section 58 of new Act) or ITR-3 with books; CA to decide",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://www.incometax.gov.in/",
+  "order": 28
+ },
+ {
+  "id": "bookkeeping",
+  "phase": "Money",
+  "title": "Simple bookkeeping sheet",
+  "detail": "Log Play payouts, AdMob payouts, expenses (domain, API, ads, devices)",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "",
+  "order": 29
+ },
+ {
+  "id": "play-account",
+  "phase": "Play Console & listing",
+  "title": "Create Play developer account",
+  "detail": "Dedicated Google account with 2SV; 25 USD fee; personal account type",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/6112435",
+  "order": 30
+ },
+ {
+  "id": "identity-verify",
+  "phase": "Play Console & listing",
+  "title": "Complete identity and contact verification",
+  "detail": "Government ID, phone, email; legal name must match",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/10841920",
+  "order": 31
+ },
+ {
+  "id": "payments-profile",
+  "phase": "Play Console & listing",
+  "title": "Set up payments profile",
+  "detail": "Individual, PAN, bank account for wire payouts",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/2700656",
+  "order": 32
+ },
+ {
+  "id": "enrol-15pct",
+  "phase": "Play Console & listing",
+  "title": "Enrol in 15 percent service fee tier",
+  "detail": "Requires account group setup; check new fee changes for India from Sept 2027",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/16954621",
+  "order": 33
+ },
+ {
+  "id": "dev-verification",
+  "phase": "Play Console & listing",
+  "title": "Check Android developer verification",
+  "detail": "Register apps if Play Console Home shows a banner",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://android-developers.googleblog.com/2026/06/android-developer-verification.html",
+  "order": 34
+ },
+ {
+  "id": "create-app-ampli",
+  "phase": "Play Console & listing",
+  "title": "Create Ampli app entry",
+  "detail": "Choose final package name, free app with in-app Pro",
+  "products": [
+   "Ampli"
+  ],
+  "status": "todo",
+  "link": "",
+  "order": 35
+ },
+ {
+  "id": "create-app-drive",
+  "phase": "Play Console & listing",
+  "title": "Create Ampli Drive app entry",
+  "detail": "Separate package name; free app with in-app Pro",
+  "products": [
+   "Ampli Drive"
+  ],
+  "status": "todo",
+  "link": "",
+  "order": 36
+ },
+ {
+  "id": "graphics-kit",
+  "phase": "Play Console & listing",
+  "title": "Store graphics kit",
+  "detail": "Icon, feature graphic, screenshots, listing text",
+  "products": [
+   "Ampli"
+  ],
+  "status": "done",
+  "link": "",
+  "order": 37
+ },
+ {
+  "id": "real-screenshots",
+  "phase": "Play Console & listing",
+  "title": "Replace mockups with real screenshots",
+  "detail": "Capture from device; no misleading UI",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/9866151",
+  "order": 38
+ },
+ {
+  "id": "drive-listing",
+  "phase": "Play Console & listing",
+  "title": "Ampli Drive listing assets",
+  "detail": "Icon, feature graphic, screenshots, descriptions",
+  "products": [
+   "Ampli Drive"
+  ],
+  "status": "todo",
+  "link": "",
+  "order": 39
+ },
+ {
+  "id": "privacy-policy",
+  "phase": "Play Console & listing",
+  "title": "Publish privacy policy URL",
+  "detail": "Host on own domain or GitHub Pages; covers AdMob, APIs, permissions, DPDP",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/10144311",
+  "order": 40
+ },
+ {
+  "id": "data-safety",
+  "phase": "Play Console & listing",
+  "title": "Complete Data safety form",
+  "detail": "Declare AdMob identifiers, diagnostics, network calls, location for Drive",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/10787469",
+  "order": 41
+ },
+ {
+  "id": "content-rating",
+  "phase": "Play Console & listing",
+  "title": "Content rating questionnaire",
+  "detail": "IARC questionnaire per app",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/9898843",
+  "order": 42
+ },
+ {
+  "id": "target-audience",
+  "phase": "Play Console & listing",
+  "title": "Target audience and ads declaration",
+  "detail": "Not designed for children; contains ads yes for Ampli",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/9867159",
+  "order": 43
+ },
+ {
+  "id": "permission-declarations",
+  "phase": "Play Console & listing",
+  "title": "Permission and FGS declarations",
+  "detail": "Media permissions, notification listener, location, FGS videos",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/13392821",
+  "order": 44
+ },
+ {
+  "id": "play-app-signing",
+  "phase": "Play Console & listing",
+  "title": "Enrol Play App Signing",
+  "detail": "Google holds app signing key; you keep upload key",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/9842756",
+  "order": 45
+ },
+ {
+  "id": "iap-ampli-pro",
+  "phase": "Play Console & listing",
+  "title": "Create in-app product ampli_pro",
+  "detail": "One-time product, INR price, active",
+  "products": [
+   "Ampli"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/1153481",
+  "order": 46
+ },
+ {
+  "id": "iap-drive-pro",
+  "phase": "Play Console & listing",
+  "title": "Create Drive Pro in-app product",
+  "detail": "One-time product about 499 INR",
+  "products": [
+   "Ampli Drive"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/1153481",
+  "order": 47
+ },
+ {
+  "id": "license-testers",
+  "phase": "Play Console & listing",
+  "title": "Add license testers",
+  "detail": "Test purchases without charges",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://developer.android.com/google/play/billing/test",
+  "order": 48
+ },
+ {
+  "id": "internal-test",
+  "phase": "Play Console & listing",
+  "title": "Internal testing track",
+  "detail": "Upload AAB, verify billing and ads on real devices",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/9845334",
+  "order": 49
+ },
+ {
+  "id": "closed-test-ampli",
+  "phase": "Play Console & listing",
+  "title": "Closed test Ampli: 12+ testers for 14 days",
+  "detail": "Recruit 15-20 testers; they must stay opted in continuously",
+  "products": [
+   "Ampli"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/14151465",
+  "order": 50
+ },
+ {
+  "id": "closed-test-drive",
+  "phase": "Play Console & listing",
+  "title": "Closed test Ampli Drive: 12+ testers for 14 days",
+  "detail": "Separate test per app; run in parallel if possible",
+  "products": [
+   "Ampli Drive"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/14151465",
+  "order": 51
+ },
+ {
+  "id": "apply-production",
+  "phase": "Play Console & listing",
+  "title": "Apply for production access",
+  "detail": "Answer questions about the closed test and feedback",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/14151465",
+  "order": 52
+ },
+ {
+  "id": "admob-account",
+  "phase": "Ads & payments",
+  "title": "Create AdMob account",
+  "detail": "Same Google account; accept terms",
+  "products": [
+   "Ampli"
+  ],
+  "status": "todo",
+  "link": "https://admob.google.com/",
+  "order": 53
+ },
+ {
+  "id": "admob-app-link",
+  "phase": "Ads & payments",
+  "title": "Add app and link to Play",
+  "detail": "Link after listing is live; app readiness review",
+  "products": [
+   "Ampli"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/admob/answer/10564477",
+  "order": 54
+ },
+ {
+  "id": "ad-units",
+  "phase": "Ads & payments",
+  "title": "Create ad units",
+  "detail": "Banner, limited interstitial, rewarded; test IDs during development",
+  "products": [
+   "Ampli"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/admob/answer/6128738",
+  "order": 55
+ },
+ {
+  "id": "app-ads-txt",
+  "phase": "Ads & payments",
+  "title": "Publish app-ads.txt",
+  "detail": "At root of developer website listed in Play",
+  "products": [
+   "Ampli"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/admob/answer/9363762",
+  "order": 56
+ },
+ {
+  "id": "admob-privacy-messages",
+  "phase": "Ads & payments",
+  "title": "Configure Privacy and messaging",
+  "detail": "GDPR and US state messages for UMP",
+  "products": [
+   "Ampli"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/admob/answer/10113207",
+  "order": 57
+ },
+ {
+  "id": "admob-tax",
+  "phase": "Ads & payments",
+  "title": "Submit AdMob tax info W-8BEN",
+  "detail": "Individual form, PAN as foreign TIN, treaty claim; CA to confirm",
+  "products": [
+   "Ampli"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/admob/answer/2772208",
+  "order": 58
+ },
+ {
+  "id": "admob-payment",
+  "phase": "Ads & payments",
+  "title": "Add AdMob wire payment method",
+  "detail": "Wire only in India; 100 USD threshold; PIN verification",
+  "products": [
+   "Ampli"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/admob/answer/2772208",
+  "order": 59
+ },
+ {
+  "id": "pre-launch-report",
+  "phase": "Launch",
+  "title": "Review pre-launch report and vitals",
+  "detail": "Fix crashes and ANRs before rollout",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/9842757",
+  "order": 60
+ },
+ {
+  "id": "staged-rollout",
+  "phase": "Launch",
+  "title": "Staged production rollout",
+  "detail": "Start 10-20 percent, monitor, then 100 percent",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/6346149",
+  "order": 61
+ },
+ {
+  "id": "promo-codes",
+  "phase": "Launch",
+  "title": "Create promo codes for Pro",
+  "detail": "For testers, reviewers and influencers",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/googleplay/android-developer/answer/6321495",
+  "order": 62
+ },
+ {
+  "id": "review-replies",
+  "phase": "Launch",
+  "title": "Reply to reviews weekly",
+  "detail": "Keep rating high in first weeks",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "",
+  "order": 63
+ },
+ {
+  "id": "promo-videos-draft",
+  "phase": "Marketing",
+  "title": "Promo videos drafted",
+  "detail": "Initial promo videos ready",
+  "products": [
+   "Ampli"
+  ],
+  "status": "done",
+  "link": "",
+  "order": 64
+ },
+ {
+  "id": "female-voiceover",
+  "phase": "Marketing",
+  "title": "Remake promo with female voice-over",
+  "detail": "Needs Runway credits; do at launch",
+  "products": [
+   "Ampli"
+  ],
+  "status": "todo",
+  "link": "",
+  "order": 65
+ },
+ {
+  "id": "youtube-channel",
+  "phase": "Marketing",
+  "title": "Ampli YouTube channel",
+  "detail": "Upload promo and demo videos; link in listing",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://www.youtube.com/",
+  "order": 66
+ },
+ {
+  "id": "meta-business",
+  "phase": "Marketing",
+  "title": "Meta Business account and page",
+  "detail": "Instagram and Facebook presence; ads later",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://business.facebook.com/",
+  "order": 67
+ },
+ {
+  "id": "google-ads-app",
+  "phase": "Marketing",
+  "title": "Google Ads App campaign",
+  "detail": "Only after ratings stabilise; INR billing with GST invoices",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://ads.google.com/",
+  "order": 68
+ },
+ {
+  "id": "tm-search",
+  "phase": "Protect",
+  "title": "Trademark search for AMPLI",
+  "detail": "Check classes 9, 41, 42 for Ampli, Amply, Amplify-type marks",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://tmrsearch.ipindia.gov.in/eregister/",
+  "order": 69
+ },
+ {
+  "id": "tm-file-9-42",
+  "phase": "Protect",
+  "title": "File trademark AMPLI in classes 9 and 42",
+  "detail": "TM-A e-filing 4,500 INR per class with Udyam; consider logo mark; use TM symbol after filing",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://ipindia.gov.in/",
+  "order": 70
+ },
+ {
+  "id": "tm-class-41",
+  "phase": "Protect",
+  "title": "Consider class 41 filing",
+  "detail": "Online music and entertainment services",
+  "products": [
+   "Ampli"
+  ],
+  "status": "todo",
+  "link": "https://ipindia.gov.in/",
+  "order": 71
+ },
+ {
+  "id": "tm-track",
+  "phase": "Protect",
+  "title": "Track TM examination and opposition",
+  "detail": "Reply to objections within deadline; use R symbol only after registration",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://ipindia.gov.in/",
+  "order": 72
+ },
+ {
+  "id": "domain",
+  "phase": "Protect",
+  "title": "Buy brand domain",
+  "detail": "ampli .app or .in or getampli.com with WHOIS privacy",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "",
+  "order": 73
+ },
+ {
+  "id": "website",
+  "phase": "Protect",
+  "title": "Brand website with app pages",
+  "detail": "GitHub Pages or Cloudflare Pages; privacy, terms, app-ads.txt",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://pages.github.com/",
+  "order": 74
+ },
+ {
+  "id": "support-email",
+  "phase": "Protect",
+  "title": "Support email on domain",
+  "detail": "Email routing to Gmail or Zoho free tier",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "",
+  "order": 75
+ },
+ {
+  "id": "social-handles",
+  "phase": "Protect",
+  "title": "Reserve social handles",
+  "detail": "YouTube, Instagram, X, Reddit",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "",
+  "order": 76
+ },
+ {
+  "id": "copyright-evidence",
+  "phase": "Protect",
+  "title": "Keep copyright evidence",
+  "detail": "Dated Git history, source of art and videos; optional registration",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://copyright.gov.in/",
+  "order": 77
+ },
+ {
+  "id": "copycat-response",
+  "phase": "Protect",
+  "title": "Copycat response plan",
+  "detail": "Play IP complaint form, DMCA notices, advocate legal notice",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "https://support.google.com/legal/answer/3110420",
+  "order": 78
+ },
+ {
+  "id": "account-security",
+  "phase": "Protect",
+  "title": "Secure Google accounts",
+  "detail": "2SV with security keys; recovery codes; limited user access in Play Console",
+  "products": [
+   "All"
+  ],
+  "status": "todo",
+  "link": "",
+  "order": 79
+ }
+]

@@ -1,0 +1,27 @@
+name: server
+on:
+  push:
+    paths: ["server/**", ".github/workflows/server.yml"]
+  pull_request:
+    paths: ["server/**", ".github/workflows/server.yml"]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: server } }
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: ampli, POSTGRES_PASSWORD: ampli, POSTGRES_DB: ampli_test }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U ampli" --health-interval 2s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: server/go.mod, cache-dependency-path: server/go.sum }
+      - run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet ./...
+      - run: go test ./... -count=1
+        env: { TEST_DATABASE_URL: "postgres://ampli:ampli@localhost:5432/ampli_test?sslmode=disable" }
+      - run: make lambda
+      - uses: actions/upload-artifact@v4
+        with: { name: ampli-owner-lambda, path: server/build/ampli-owner-lambda.zip }
