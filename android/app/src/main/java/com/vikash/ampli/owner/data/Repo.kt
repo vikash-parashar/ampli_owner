@@ -85,6 +85,14 @@ interface Repo {
     suspend fun skus(): List<Sku>
     /** Adds a SKU or changes its price. */
     suspend fun putSku(s: Sku): Sku
+
+    // Growth: tracked links and cross-promo codes. Product null = every app.
+    suspend fun links(product: String? = null): List<TrackedLink>
+    suspend fun createLink(l: NewLink): TrackedLink
+    suspend fun deleteLink(id: Long)
+    suspend fun promo(): List<PromoPair>
+    /** Adds Play promo codes; codes already known are skipped. */
+    suspend fun importPromoCodes(p: PromoImport): PromoImportResult
 }
 
 // ---------------- local (on-device JSON file, seeded from assets) ----------------
@@ -353,7 +361,54 @@ class LocalRepo(private val context: Context) : Repo {
     override suspend fun skus(): List<Sku> = emptyList()
 
     override suspend fun putSku(s: Sku): Sku = throw IllegalStateException("Connect a server in Settings first")
+
+    private var sampleLinks: List<TrackedLink> = Sample.links()
+    private var samplePromo: List<PromoPair> = Sample.promo()
+    private val sampleCodes = mutableSetOf<String>()
+
+    override suspend fun links(product: String?): List<TrackedLink> = inMemory {
+        sampleLinks.filter { product == null || it.product == product }
+    }
+
+    override suspend fun createLink(l: NewLink): TrackedLink = inMemory {
+        if (l.channel == "crosspromo" && (l.fromProduct.isBlank() || l.fromProduct == l.product)) {
+            throw IllegalArgumentException("Pick the other app the link is shown in")
+        }
+        val id = (sampleLinks.maxOfOrNull { it.id } ?: 0L) + 1L
+        val made = Sample.link(
+            id = id, product = l.product, channel = l.channel, label = l.label.trim().take(60),
+            fromProduct = if (l.channel == "crosspromo") l.fromProduct else "", createdAt = now(),
+        )
+        sampleLinks = listOf(made) + sampleLinks
+        made
+    }
+
+    override suspend fun deleteLink(id: Long) = inMemory {
+        sampleLinks = sampleLinks.filter { it.id != id }
+    }
+
+    override suspend fun promo(): List<PromoPair> = inMemory { samplePromo }
+
+    override suspend fun importPromoCodes(p: PromoImport): PromoImportResult = inMemory {
+        var added = 0
+        var skipped = 0
+        p.codes.forEach { c ->
+            if (PROMO_CODE.matches(c) && sampleCodes.add(c)) added++ else skipped++
+        }
+        val match: (PromoPair) -> Boolean = {
+            it.sourceProduct == p.sourceProduct && it.targetProduct == p.targetProduct && it.sku == p.sku
+        }
+        samplePromo = if (samplePromo.any(match)) {
+            samplePromo.map { if (match(it)) it.copy(imported = it.imported + added, available = it.available + added) else it }
+        } else {
+            samplePromo + PromoPair(p.sourceProduct, p.targetProduct, p.sku, imported = added.toLong(), available = added.toLong())
+        }
+        PromoImportResult(added, skipped)
+    }
 }
+
+/** A Play promo code as the server accepts it. */
+val PROMO_CODE = Regex("^[A-Z0-9]{6,40}$")
 
 // ---------------- remote (Go server) ----------------
 
@@ -549,6 +604,29 @@ class RemoteRepo(baseUrl: String, private val token: String) : Repo {
 
     override suspend fun putSku(s: Sku): Sku =
         json.decodeFromString(Sku.serializer(), call("PUT", "/v1/skus", json.encodeToString(Sku.serializer(), s)))
+
+    override suspend fun links(product: String?): List<TrackedLink> =
+        get("/v1/links" + (product?.let { "?product=$it" } ?: ""), ListSerializer(TrackedLink.serializer()))
+
+    override suspend fun createLink(l: NewLink): TrackedLink {
+        // Optional fields only when set, so the server's own defaults apply.
+        val body = buildJsonObject {
+            put("product", l.product); put("channel", l.channel)
+            if (l.label.isNotBlank()) put("label", l.label.trim())
+            if (l.listing.isNotBlank()) put("listing", l.listing)
+            if (l.fromProduct.isNotBlank()) put("from_product", l.fromProduct)
+        }.toString()
+        return json.decodeFromString(TrackedLink.serializer(), call("POST", "/v1/links", body))
+    }
+
+    override suspend fun deleteLink(id: Long) {
+        call("DELETE", "/v1/links/$id")
+    }
+
+    override suspend fun promo(): List<PromoPair> = get("/v1/promo", ListSerializer(PromoPair.serializer()))
+
+    override suspend fun importPromoCodes(p: PromoImport): PromoImportResult =
+        json.decodeFromString(PromoImportResult.serializer(), call("POST", "/v1/promo/codes", json.encodeToString(PromoImport.serializer(), p)))
 }
 
 /**

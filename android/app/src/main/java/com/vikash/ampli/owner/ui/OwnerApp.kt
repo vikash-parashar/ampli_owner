@@ -70,6 +70,7 @@ sealed interface Route {
     data object Guides : Route
     data class Guide(val id: String) : Route
     data object Settings : Route
+    data object Growth : Route
 }
 
 enum class Tab(val label: String, val icon: ImageVector, val productScoped: Boolean) {
@@ -145,6 +146,7 @@ class Nav(
             "open_reviews" -> { stack.clear(); tab = Tab.Reviews }
             "open_inbox" -> { stack.clear(); tab = Tab.Inbox }
             "open_settings" -> { stack.clear(); tab = Tab.Plan; go(Route.Settings) }
+            "open_growth" -> { stack.clear(); tab = Tab.Ads; go(Route.Growth) }
             else -> {}
         }
     }
@@ -184,6 +186,7 @@ fun OwnerApp(repo: Repo, onSettingsSaved: () -> Unit) {
                 Route.Guides -> "Guides"
                 is Route.Guide -> "Guide"
                 Route.Settings -> "Settings"
+                Route.Growth -> "Growth"
                 null -> null
             }
 
@@ -268,6 +271,7 @@ fun OwnerApp(repo: Repo, onSettingsSaved: () -> Unit) {
                     Route.Guides -> GuidesScreen(nav, m)
                     is Route.Guide -> GuideScreen(nav, top.id, m)
                     Route.Settings -> SettingsScreen(nav, m, onSettingsSaved)
+                    Route.Growth -> GrowthScreen(nav, m)
                     null -> when (nav.tab) {
                         Tab.Dashboard -> DashboardScreen(nav, m)
                         Tab.Ads -> AdsScreen(nav, m)

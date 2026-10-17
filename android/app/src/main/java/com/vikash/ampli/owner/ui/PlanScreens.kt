@@ -82,6 +82,7 @@ fun PlanScreen(nav: Nav, modifier: Modifier) {
                     Tile("Guides", "Play, GST, trademark", Modifier.weight(1f)) { nav.go(Route.Guides) }
                 }
             }
+            item { Tile("Growth", "tracked links and gift codes", Modifier.fillMaxWidth()) { nav.go(Route.Growth) } }
             item { MoreFromAmpliCard() }
             item { Section("Business decisions") }
             item {

@@ -298,4 +298,44 @@ internal object Sample {
         praise = listOf(ReviewTheme("Record player", 212), ReviewTheme("No subscription", 180), ReviewTheme("Haryanvi voice", 141), ReviewTheme("Fast alerts", 133)),
         complaints = listOf(ReviewTheme("Too many ads", 64), ReviewTheme("Voice misses", 22), ReviewTheme("OTP delay", 18), ReviewTheme("Wants lyrics", 15)),
     )
+
+    // ---------------- growth ----------------
+
+    private fun medium(channel: String): String = when (channel) {
+        "play_hindi" -> "listing"
+        "website" -> "website"
+        "crosspromo" -> "app"
+        "other" -> "link"
+        else -> "social"
+    }
+
+    /** The Play link a tracked link points to, with the referrer the app reads on first open. */
+    fun linkUrl(id: Long, product: String, channel: String, fromProduct: String): String {
+        val pkg = Channels.packages[product] ?: Channels.packages.getValue("mp3")
+        val source = if (channel == "crosspromo" && fromProduct.isNotBlank()) "ampli_$fromProduct" else channel
+        val referrer = "utm_source=$source&utm_medium=${medium(channel)}&utm_campaign=ampli-l$id"
+        return "https://play.google.com/store/apps/details?id=$pkg&referrer=" + java.net.URLEncoder.encode(referrer, "UTF-8")
+    }
+
+    fun link(
+        id: Long, product: String, channel: String, label: String, fromProduct: String = "", createdAt: String = ago(24L * 20),
+        installs: Long = 0, installs30d: Long = 0, proSales: Long = 0, netRupees: Long = 0,
+    ) = TrackedLink(
+        id = id, product = product, channel = channel, label = label,
+        listing = if (channel == "play_hindi") "hi-IN" else "",
+        fromProduct = fromProduct, utmCampaign = "ampli-l$id", createdAt = createdAt,
+        installs = installs, installs30d = installs30d, proSales = proSales, netPaise = netRupees * 100,
+        channelName = Channels.name(channel), url = linkUrl(id, product, channel, fromProduct),
+    )
+
+    fun links(): List<TrackedLink> = listOf(
+        link(1, "mp3", "whatsapp", "Family groups", installs = 980, installs30d = 412, proSales = 9, netRupees = 1522),
+        link(2, "mp3", "play_hindi", "", installs = 1630, installs30d = 640, proSales = 14, netRupees = 2368),
+        link(3, "carhub", "instagram", "Bio link", installs = 310, installs30d = 128, proSales = 5, netRupees = 2110),
+        link(4, "mp3", "crosspromo", "", fromProduct = "carhub", installs = 220, installs30d = 96, proSales = 7, netRupees = 1184),
+    )
+
+    fun promo(): List<PromoPair> = listOf(
+        PromoPair("carhub", "mp3", "ampli_pro", imported = 50, available = 38, eligible = 14, claimed = 12, redeemed = 7),
+    )
 }

@@ -252,7 +252,7 @@ data class Alert(
     val product: String = "",
     val title: String = "",
     val detail: String = "",
-    val action: String = "", // open_ads | open_reviews | open_inbox | open_settings | ""
+    val action: String = "", // open_ads | open_reviews | open_inbox | open_settings | open_growth | ""
 )
 
 @Serializable
@@ -446,3 +446,75 @@ data class ReviewsResponse(
     val themes: ReviewThemes = ReviewThemes(),
     val reviews: List<Review> = emptyList(),
 )
+
+// ---------------- growth: tracked links and cross-promo codes ----------------
+
+/** A tracked Play link for one channel (GET /v1/links). Installs and money come from Play install referrers. */
+@Serializable
+data class TrackedLink(
+    val id: Long = 0,
+    val product: String = "mp3",
+    val channel: String = "other",
+    val label: String = "",
+    val listing: String = "",
+    @SerialName("from_product") val fromProduct: String = "",
+    @SerialName("utm_campaign") val utmCampaign: String = "",
+    @SerialName("created_at") val createdAt: String = "",
+    val installs: Long = 0,
+    @SerialName("installs_30d") val installs30d: Long = 0,
+    @SerialName("pro_sales") val proSales: Long = 0,
+    @SerialName("net_paise") val netPaise: Long = 0,
+    @SerialName("channel_name") val channelName: String = "",
+    val url: String = "",
+)
+
+@Serializable
+data class NewLink(
+    val product: String,
+    val channel: String,
+    val label: String = "",
+    val listing: String = "",
+    @SerialName("from_product") val fromProduct: String = "",
+)
+
+/** One cross-promo pair (GET /v1/promo): buyers of [sourceProduct] Pro get a code for [targetProduct]. */
+@Serializable
+data class PromoPair(
+    @SerialName("source_product") val sourceProduct: String = "carhub",
+    @SerialName("target_product") val targetProduct: String = "mp3",
+    val sku: String = "ampli_pro",
+    val imported: Long = 0,
+    val available: Long = 0,
+    val eligible: Long = 0,
+    val claimed: Long = 0,
+    val redeemed: Long = 0,
+)
+
+@Serializable
+data class PromoImport(
+    @SerialName("source_product") val sourceProduct: String,
+    @SerialName("target_product") val targetProduct: String,
+    val sku: String,
+    val codes: List<String>,
+)
+
+@Serializable
+data class PromoImportResult(val added: Int = 0, val skipped: Int = 0)
+
+/** Where a tracked link is shared. Same ids and names as the server. */
+object Channels {
+    val names = linkedMapOf(
+        "play_hindi" to "Hindi Play listing",
+        "website" to "ampliapps.in",
+        "whatsapp" to "WhatsApp",
+        "telegram" to "Telegram",
+        "instagram" to "Instagram (unpaid)",
+        "youtube" to "YouTube",
+        "crosspromo" to "More from Ampli",
+        "other" to "Other link",
+    )
+    fun name(id: String) = names[id] ?: id
+
+    /** Play package of each app, for the links built on the phone. */
+    val packages = mapOf("mp3" to "com.vikash.ampli", "carhub" to "com.vikash.ampli.drive", "naukri" to "com.vikash.ampli.naukri")
+}

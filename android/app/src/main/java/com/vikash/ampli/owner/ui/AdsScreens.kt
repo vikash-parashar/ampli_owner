@@ -363,6 +363,20 @@ private fun AdsContent(
             }
         }
 
+        // ---- free installs: tracked links and cross-promo (the Growth screen) ----
+        AmpliCard(Modifier.rise(key, n++)) {
+            CardTitle("Grow without ads", "free installs")
+            Text(
+                "Make a tracked link for WhatsApp, Instagram, your website or another Ampli app, and see which one brings installs " +
+                    "and Pro sales. Gift codes for Pro buyers live here too.",
+                fontSize = 12.sp, color = a.muted, lineHeight = 17.sp,
+            )
+            Row(Modifier.fillMaxWidth().padding(top = 10.dp)) {
+                Spacer(Modifier.weight(1f))
+                SmallButton("Open Growth", BtnKind.Primary) { nav.go(Route.Growth) }
+            }
+        }
+
         // ---- ad accounts ----
         AmpliCard(Modifier.rise(key, n++)) {
             CardTitle("Ad accounts", "connected once, run from here")
@@ -588,7 +602,7 @@ private fun CampaignItem(nav: Nav, c: AdCampaign, actions: CampaignActions) {
 
 /** One of the small boxes in a campaign: label top-left, value bottom-right. */
 @Composable
-private fun MiniMetric(label: String, value: String, valueColor: Color, modifier: Modifier) {
+fun MiniMetric(label: String, value: String, valueColor: Color, modifier: Modifier) {
     val a = ampli()
     Column(
         modifier
@@ -1004,7 +1018,7 @@ private fun NewCampaignSheet(nav: Nav, platforms: List<AdsPlatform>, startProduc
     }
 }
 
-private class WizardOption(
+class WizardOption(
     val title: String,
     val sub: String,
     val selected: Boolean,
@@ -1014,7 +1028,7 @@ private class WizardOption(
 
 /** Two-column grid of option tiles (the preview's .opts). */
 @Composable
-private fun OptionGrid(options: List<WizardOption>) {
+fun OptionGrid(options: List<WizardOption>) {
     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
         options.chunked(2).forEach { pair ->
             Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -1046,7 +1060,7 @@ private fun OptionTile(o: WizardOption, modifier: Modifier) {
 }
 
 @Composable
-private fun WizardQuestion(text: String) {
+fun WizardQuestion(text: String) {
     Text(
         text, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, color = ampli().muted, textAlign = TextAlign.Center,
         modifier = Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 8.dp),
@@ -1062,7 +1076,7 @@ private fun BigValue(text: String) {
 }
 
 @Composable
-private fun WizardNote(text: String) {
+fun WizardNote(text: String) {
     Text(
         text, fontSize = 11.5.sp, color = ampli().muted, textAlign = TextAlign.Center, lineHeight = 17.sp,
         modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
