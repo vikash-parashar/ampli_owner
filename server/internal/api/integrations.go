@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vikash-parashar/ampli_owner/server/internal/admob"
+	"github.com/vikash-parashar/ampli_owner/server/internal/play"
 	"github.com/vikash-parashar/ampli_owner/server/internal/store"
 )
 
@@ -52,6 +53,7 @@ func (s *Server) disconnectAdMob(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, err)
 		return
 	}
+	s.audit(r, "admob disconnect", "")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -87,6 +89,7 @@ func (s *Server) admobCallback(r *http.Request, page func(int, string, string)) 
 		page(http.StatusInternalServerError, "Not connected", "Could not save the AdMob login.")
 		return
 	}
+	_ = s.Store.Audit(r.Context(), "admob connect", account)
 	page(http.StatusOK, "AdMob connected", "Ad earnings will show on the dashboards after the next sync. Go back to Ampli Owner.")
 }
 
@@ -148,11 +151,17 @@ func (s *Server) SyncIntegrations(ctx context.Context) SyncResult {
 			thisMonth := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC)
 			for _, month := range []time.Time{thisMonth.AddDate(0, -1, 0), thisMonth} { // from the 1st, so the 31st has a previous month
 				rows, err := s.Play.BulkStats(ctx, s.PlayBucket, p.PackageID, month)
+				if errors.Is(err, play.ErrNoObject) {
+					continue // Play writes the month's report a day or two into the month
+				}
 				if err != nil {
 					add(fmt.Sprintf("%s Play report %s", p.Name, month.Format("Jan")), err)
 					continue
 				}
 				for _, d := range rows {
+					if !d.HasInstalls {
+						continue
+					}
 					if err := s.Store.SetPlayStats(ctx, p.ID, d.Day, d.Installs, d.Uninstalls, d.Active, d.Rating); err == nil {
 						res.PlayDays++
 					}
@@ -252,6 +261,7 @@ func (s *Server) saveSKU(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, err)
 		return
 	}
+	s.audit(r, "sku", fmt.Sprintf("%s %s %s = %s", k.ProductID, k.SKU, k.Kind, rupees(k.PricePaise)))
 	writeJSON(w, http.StatusOK, k)
 }
 
@@ -267,5 +277,22 @@ func (s *Server) eraseInstall(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, err)
 		return
 	}
+	s.audit(r, "erase install", fmt.Sprintf("install %s…, %d rows", s.hashKey("audit", strings.ToLower(id))[:10], n))
 	writeJSON(w, http.StatusOK, map[string]int64{"erased_rows": n})
+}
+
+// audit records an owner action that changes money or data; a failure to write it is logged, not fatal.
+func (s *Server) audit(r *http.Request, action, detail string) {
+	if err := s.Store.Audit(r.Context(), action, detail); err != nil {
+		slog.Error("audit", "action", action, "err", err)
+	}
+}
+
+func (s *Server) auditLog(w http.ResponseWriter, r *http.Request) {
+	es, err := s.Store.AuditLog(r.Context())
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, es)
 }

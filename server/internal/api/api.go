@@ -20,6 +20,9 @@ import (
 	"github.com/vikash-parashar/ampli_owner/server/internal/store"
 )
 
+// AuthFailuresPerDay is how many wrong owner tokens one network may send per day.
+const AuthFailuresPerDay = 20
+
 // ReportsPerDay is how many reports one install may file in 24 hours.
 const ReportsPerDay = 5
 
@@ -86,6 +89,7 @@ func (s *Server) Handler() http.Handler {
 	owner.HandleFunc("GET /v1/ads/campaigns/{id}/log", s.campaignLog)
 	owner.HandleFunc("DELETE /v1/ads/campaigns/{id}", s.deleteCampaign)
 	owner.HandleFunc("GET /v1/alerts", s.alerts)
+	owner.HandleFunc("GET /v1/audit", s.auditLog)
 	owner.HandleFunc("GET /v1/integrations", s.integrations)
 	owner.HandleFunc("POST /v1/integrations/admob/connect", s.connectAdMob)
 	owner.HandleFunc("DELETE /v1/integrations/admob", s.disconnectAdMob)
@@ -123,6 +127,11 @@ func (s *Server) requireOwner(next http.Handler) http.Handler {
 			return want != "" && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 		}
 		if !ok || !(match(s.OwnerToken) || match(s.OwnerTokenNext)) {
+			// Throttle guessing: 20 wrong tokens per network per day, then 429 for everyone on it.
+			if allowed, err := s.Store.IPHit(r.Context(), s.hashKey("auth", clientNet(r)), s.today(), AuthFailuresPerDay); err == nil && !allowed {
+				writeErr(w, http.StatusTooManyRequests, "too many wrong tokens today")
+				return
+			}
 			writeErr(w, http.StatusUnauthorized, "owner token required")
 			return
 		}

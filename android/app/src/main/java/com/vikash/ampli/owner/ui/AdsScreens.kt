@@ -521,6 +521,14 @@ private fun CampaignItem(nav: Nav, c: AdCampaign, actions: CampaignActions) {
                     "Pause automatically if ROAS stays under ${f1(r.minRoas)}x after ${r.minDays} days and ${rupees(r.minSpendPaise)} spent. Tap to change.",
                     fontSize = 11.sp, color = a.muted, lineHeight = 15.sp,
                 )
+                if (r.enabled && r.pendingSince != null) {
+                    Text("Will pause at the next sync unless results improve.", fontSize = 11.sp, color = a.bad,
+                        fontWeight = FontWeight.Bold, lineHeight = 15.sp)
+                } else if (r.enabled && c.status == "live" && r.holdUntil != null &&
+                    runCatching { java.time.OffsetDateTime.parse(r.holdUntil).isAfter(java.time.OffsetDateTime.now()) }.getOrDefault(false)
+                ) {
+                    Text("Waiting 3 days after your resume before it checks again.", fontSize = 11.sp, color = a.muted, lineHeight = 15.sp)
+                }
             }
             Switch(
                 checked = r.enabled,

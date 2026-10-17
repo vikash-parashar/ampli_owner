@@ -305,8 +305,12 @@ func TestAdsManagerFlow(t *testing.T) {
 	if code := call(t, srv, "DELETE", "/v1/ads/campaigns/1", true, nil, nil); code != 204 {
 		t.Fatalf("delete: %d", code)
 	}
-	if code := call(t, srv, "GET", "/v1/ads/campaigns/1/log", true, nil, &log); code != 200 || len(log) != 0 {
-		t.Fatalf("log after delete: %d %d", code, len(log))
+	call(t, srv, "GET", "/v1/ads/campaigns?product=mp3", true, nil, &list)
+	if len(list.Campaigns) != 0 {
+		t.Fatalf("deleted campaign still listed: %+v", list.Campaigns)
+	}
+	if code := call(t, srv, "GET", "/v1/ads/campaigns/1/log", true, nil, &log); code != 200 || log[0].Action != "deleted" {
+		t.Fatalf("log after delete should be kept: %d %+v", code, log)
 	}
 }
 
@@ -336,8 +340,18 @@ func TestSKUsEraseAndTokenRotation(t *testing.T) {
 	if code := callH(t, srv, "GET", "/v1/alerts", false, map[string]string{"Authorization": "Bearer next-owner-token-0123456789abcdef"}, nil, nil); code != 200 {
 		t.Fatalf("next token: %d", code)
 	}
-	if code := callH(t, srv, "GET", "/v1/alerts", false, map[string]string{"Authorization": "Bearer wrong"}, nil, nil); code != 401 {
-		t.Fatalf("wrong token: %d", code)
+	for i := 0; i < api.AuthFailuresPerDay; i++ {
+		if code := callH(t, srv, "GET", "/v1/alerts", false, map[string]string{"Authorization": "Bearer wrong"}, nil, nil); code != 401 {
+			t.Fatalf("wrong token %d: %d", i, code)
+		}
+	}
+	if code := callH(t, srv, "GET", "/v1/alerts", false, map[string]string{"Authorization": "Bearer wrong"}, nil, nil); code != 429 {
+		t.Fatalf("token guessing not throttled: %d", code)
+	}
+	var audit []store.AuditEntry
+	call(t, srv, "GET", "/v1/audit", true, nil, &audit)
+	if len(audit) != 2 || audit[0].Action != "erase install" || audit[1].Action != "sku" {
+		t.Fatalf("audit = %+v", audit)
 	}
 }
 

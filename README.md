@@ -31,7 +31,7 @@ Tests need a throwaway Postgres: `make test` (uses `TEST_DATABASE_URL`).
 2. `make lambda` builds `build/ampli-owner-lambda.zip` (arm64 `bootstrap`; CI uploads it as an artifact too).
 3. Create a Lambda: runtime `provided.al2023`, arch arm64, handler `bootstrap`; env `DATABASE_URL`,
    `OWNER_TOKEN` (24+ random characters); enable a Function URL (auth NONE; the app sends the token).
-   Set **reserved concurrency to 5**: the public endpoints are open to the internet, and this caps both the
+   Set the **timeout to 120 s** (the daily sync calls every platform) and **reserved concurrency to 5**: the public endpoints are open to the internet, and this caps both the
    bill and the Postgres connections (the server uses at most 2 connections per instance on Lambda).
 4. Seed once from your laptop: `DATABASE_URL=... go run ./cmd/server seed seed`.
 5. Put the Function URL and token in the app's Settings. The app keeps it encrypted with an Android Keystore key

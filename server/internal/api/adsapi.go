@@ -469,7 +469,8 @@ func (s *Server) deleteCampaign(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, err)
 		return
 	}
-	if c.AdAccountID != nil && c.ExternalID != "" && oneOf(c.Status, "live", "in_review", "error") {
+	// Always pause on the platform (it is idempotent): our status may say paused while the platform is live.
+	if c.AdAccountID != nil && c.ExternalID != "" {
 		_, p, a, tok, err := s.account(ctx, *c.AdAccountID)
 		if err == nil {
 			err = p.SetActive(ctx, tok, a, ads.Ref{CampaignID: c.ExternalID, SetID: c.ExternalSetID}, false)
@@ -483,6 +484,7 @@ func (s *Server) deleteCampaign(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, err)
 		return
 	}
+	_ = s.Store.LogCampaign(ctx, id, "owner", "deleted", "paused on the platform and hidden; numbers and log are kept")
 	w.WriteHeader(http.StatusNoContent)
 }
 

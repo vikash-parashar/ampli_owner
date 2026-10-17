@@ -317,6 +317,10 @@ data class AutoStop(
     @SerialName("min_roas") val minRoas: Double = 0.5,
     @SerialName("min_days") val minDays: Int = 7,
     @SerialName("min_spend_paise") val minSpendPaise: Long = 200000,
+    /** Set by the server when a sync found the campaign below the limit; the next sync 24 h later pauses it. */
+    @SerialName("pending_since") val pendingSince: String? = null,
+    /** After a manual resume the rule waits until this time. */
+    @SerialName("hold_until") val holdUntil: String? = null,
 )
 
 @Serializable

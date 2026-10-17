@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 
@@ -19,8 +20,9 @@ import (
 const (
 	// PublicHitsPerDay caps install, purchase, event and vote calls per install per day.
 	PublicHitsPerDay = 30
-	// IPHitsPerDay caps all public calls from one /24 (IPv4) or /64 (IPv6) network per day.
-	IPHitsPerDay = 300
+	// IPHitsPerDay caps public writes from one /24 (IPv4) or /48 (IPv6) network per day. Indian mobile
+	// carriers put many real users behind one IPv4 /24 (CGNAT), so it is generous; GETs are not counted.
+	IPHitsPerDay = 1000
 )
 
 var uuidV4 = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
@@ -34,9 +36,12 @@ func clientNet(r *http.Request) string {
 	if err != nil {
 		host = r.RemoteAddr
 	}
-	if host == "" || host == "127.0.0.1" || host == "::1" {
+	// Behind your own reverse proxy (Docker), set TRUST_PROXY=1: the right-most X-Forwarded-For hop is the one
+	// that proxy added, so the client can't spoof it.
+	if os.Getenv("TRUST_PROXY") == "1" {
 		if xf := r.Header.Get("X-Forwarded-For"); xf != "" {
-			host = strings.TrimSpace(strings.Split(xf, ",")[0])
+			hops := strings.Split(xf, ",")
+			host = strings.TrimSpace(hops[len(hops)-1])
 		}
 	}
 	ip := net.ParseIP(host)
@@ -46,7 +51,7 @@ func clientNet(r *http.Request) string {
 	case ip.To4() != nil:
 		return ip.Mask(net.CIDRMask(24, 32)).String()
 	default:
-		return ip.Mask(net.CIDRMask(64, 128)).String()
+		return ip.Mask(net.CIDRMask(48, 128)).String()
 	}
 }
 
@@ -65,12 +70,16 @@ func (s *Server) guard(w http.ResponseWriter, r *http.Request, installID string,
 		return false
 	}
 	ctx := r.Context()
-	ok, err := s.Store.IPHit(ctx, s.hashKey("ip", clientNet(r)), s.today(), IPHitsPerDay)
-	if err != nil {
-		fail(w, r, err)
-		return false
+	ok := true
+	if r.Method != http.MethodGet {
+		var err error
+		if ok, err = s.Store.IPHit(ctx, s.hashKey("ip", clientNet(r)), s.today(), IPHitsPerDay); err != nil {
+			fail(w, r, err)
+			return false
+		}
 	}
 	if ok && perInstall {
+		var err error
 		ok, err = s.Store.Hit(ctx, installID, s.today(), PublicHitsPerDay)
 		if err != nil {
 			fail(w, r, err)
@@ -110,8 +119,14 @@ func (s *Server) publicInstall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"recorded": created})
 }
 
-// netOf is what reaches the bank from a price paid in India: minus 18% GST, then minus Google's 15% fee.
-func netOf(gross int64) int64 { return gross * 100 / 118 * 85 / 100 }
+// netOf is what reaches the bank: for buyers in India minus 18% GST, then minus Google's 15% fee for everyone.
+// Outside India the INR list price is an estimate (Play converts to local prices and taxes).
+func netOf(gross int64, region string) int64 {
+	if region == "" || region == "IN" {
+		gross = gross * 100 / 118
+	}
+	return gross * 85 / 100
+}
 
 func (s *Server) publicPurchase(w http.ResponseWriter, r *http.Request) {
 	var in struct {
@@ -206,7 +221,8 @@ func (s *Server) verifyPurchase(ctx context.Context, product, sku, token string,
 		p.Region = "TEST" // license testers and promo codes are not money
 		return purchaseCheck{}
 	}
-	p.Verified, p.NetPaise = true, netOf(p.AmountPaise)
+	p.AmountPaise *= gp.Quantity
+	p.Verified, p.NetPaise = true, netOf(p.AmountPaise, gp.RegionCode)
 	return purchaseCheck{}
 }
 

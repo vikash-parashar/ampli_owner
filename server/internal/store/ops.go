@@ -190,3 +190,41 @@ func (s *Store) SetPlayStats(ctx context.Context, product string, day time.Time,
 		product, day, installs, uninstalls, active, rating)
 	return err
 }
+
+// ---- owner audit log ----
+
+type AuditEntry struct {
+	ID        int64     `json:"id"`
+	Action    string    `json:"action"`
+	Detail    string    `json:"detail"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (s *Store) Audit(ctx context.Context, action, detail string) error {
+	_, err := s.DB.Exec(ctx, `INSERT INTO audit_log (action, detail) VALUES ($1,$2)`, action, detail)
+	return err
+}
+
+func (s *Store) AuditLog(ctx context.Context) ([]AuditEntry, error) {
+	rows, err := s.DB.Query(ctx, `SELECT id, action, detail, created_at FROM audit_log ORDER BY id DESC LIMIT 200`)
+	if err != nil {
+		return nil, err
+	}
+	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (AuditEntry, error) {
+		var e AuditEntry
+		return e, r.Scan(&e.ID, &e.Action, &e.Detail, &e.CreatedAt)
+	})
+	if out == nil {
+		out = []AuditEntry{}
+	}
+	return out, err
+}
+
+// ExpiringAccounts lists connected ad accounts whose token expires before `before`.
+func (s *Store) ExpiringAccounts(ctx context.Context, before time.Time) ([]AdAccount, error) {
+	rows, err := s.DB.Query(ctx, `SELECT `+accountCols+` FROM ad_accounts WHERE status='connected' AND expires_at IS NOT NULL AND expires_at < $1`, before)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (AdAccount, error) { return scanAccount(r) })
+}

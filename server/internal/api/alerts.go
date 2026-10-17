@@ -108,6 +108,16 @@ func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, err)
 		return
 	}
+	soon, err := s.Store.ExpiringAccounts(ctx, s.Now().Add(7*24*time.Hour))
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	for _, a := range soon {
+		add(Alert{ID: fmt.Sprintf("account-expiring-%d", a.ID), Severity: "medium", Action: "open_ads",
+			Title:  a.Name + " sign-in expires within 7 days",
+			Detail: "Connect it again in Ads now (or use a Meta System User token, which never expires) so syncing and auto-stop keep working."})
+	}
 	for _, a := range accts {
 		if a.Status == "expired" {
 			add(Alert{ID: fmt.Sprintf("account-expired-%d", a.ID), Severity: "high", Action: "open_ads",

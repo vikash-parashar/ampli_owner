@@ -190,12 +190,16 @@ func scanCampaign(r pgx.Row) (Campaign, error) {
 		c.Countries = []string{}
 	}
 	c.Verdict = ads.Judge(c.Status, c.SpendPaise, c.RevenuePaise, c.Days)
+	if c.Attribution == "none" && c.SpendPaise > 0 && oneOfCode(c.Verdict.Code, "scale", "watch", "stop") {
+		c.Verdict = ads.Verdict{Code: "unknown", Label: "Can't judge yet",
+			Reason: "No installs are matched to this ad yet, so its earnings can't be measured. Check Google Play is connected."}
+	}
 	return c, nil
 }
 
 // Campaigns lists campaigns for one product, or all when product is "".
 func (s *Store) Campaigns(ctx context.Context, product string) ([]Campaign, error) {
-	rows, err := s.DB.Query(ctx, campaignSelect+` WHERE ($1 = '' OR c.product_id = $1) ORDER BY c.created_at DESC, c.id DESC`, product)
+	rows, err := s.DB.Query(ctx, campaignSelect+` WHERE c.deleted_at IS NULL AND ($1 = '' OR c.product_id = $1) ORDER BY c.created_at DESC, c.id DESC`, product)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +207,7 @@ func (s *Store) Campaigns(ctx context.Context, product string) ([]Campaign, erro
 }
 
 func (s *Store) Campaign(ctx context.Context, id int64) (Campaign, error) {
-	return scanCampaign(s.DB.QueryRow(ctx, campaignSelect+` WHERE c.id = $1`, id))
+	return scanCampaign(s.DB.QueryRow(ctx, campaignSelect+` WHERE c.id = $1 AND c.deleted_at IS NULL`, id))
 }
 
 // NewCampaign is the row written before the platform call.
@@ -275,9 +279,9 @@ func (s *Store) RecentRulePauses(ctx context.Context, since time.Time) ([]LogEnt
 	})
 }
 
-// DeleteCampaign removes a campaign with its daily numbers and log.
+// DeleteCampaign hides a campaign; its numbers and log stay for the record.
 func (s *Store) DeleteCampaign(ctx context.Context, id int64) error {
-	tag, err := s.DB.Exec(ctx, `DELETE FROM campaigns WHERE id=$1`, id)
+	tag, err := s.DB.Exec(ctx, `UPDATE campaigns SET deleted_at=now() WHERE id=$1 AND deleted_at IS NULL`, id)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
@@ -457,6 +461,7 @@ func (s *Store) EraseInstall(ctx context.Context, installID string) (int64, erro
 	err := pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
 		for _, q := range []string{
 			`DELETE FROM installs WHERE install_id=$1`,
+			`UPDATE tickets t SET votes = votes - 1 FROM feature_votes v WHERE v.ticket_id = t.id AND v.install_id=$1`,
 			`DELETE FROM feature_votes WHERE install_id=$1`,
 			`DELETE FROM public_hits WHERE install_id=$1`,
 			`DELETE FROM tickets WHERE install_id=$1`,
@@ -479,4 +484,13 @@ func (s *Store) Hit(ctx context.Context, installID string, day time.Time, limit 
 	err := s.DB.QueryRow(ctx, `INSERT INTO public_hits (install_id, day, hits) VALUES ($1,$2,1)
 		ON CONFLICT (install_id, day) DO UPDATE SET hits = public_hits.hits + 1 RETURNING hits`, installID, day).Scan(&n)
 	return n <= limit, err
+}
+
+func oneOfCode(v string, opts ...string) bool {
+	for _, o := range opts {
+		if v == o {
+			return true
+		}
+	}
+	return false
 }

@@ -140,6 +140,12 @@ live campaigns with a Stop verdict, campaigns in error, expired ad accounts or A
 - `GET /v1/skus` → `[{"product","sku","kind","price_paise"}]`; `PUT /v1/skus` with one of those → it (add or change a price).
 - `DELETE /v1/installs/{install_id}` → `{"erased_rows": 3}`.
 
+## Audit and safety
+- `GET /v1/audit` → `[{"id","action","detail","created_at"}]` (erase, SKU prices, AdMob connect/disconnect).
+- 20 wrong owner tokens from one network in a day → 429 for the rest of the day.
+- Deleted campaigns are hidden, not erased; their numbers and log stay. Verdict code `unknown` ("Can't judge yet")
+  when no installs are matched to the campaign.
+
 ## Owner token rotation
 The server accepts `OWNER_TOKEN` and, when set, `OWNER_TOKEN_NEXT`.
 

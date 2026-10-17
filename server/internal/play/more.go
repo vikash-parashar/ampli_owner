@@ -21,6 +21,7 @@ type Purchase struct {
 	RegionCode string
 	Time       time.Time
 	Test       bool // license tester or promo
+	Quantity   int64
 }
 
 // ProductPurchase checks a purchase token with Google Play (purchases.products.get).
@@ -35,12 +36,13 @@ func (c *Client) ProductPurchase(ctx context.Context, pkg, sku, token string) (P
 		RegionCode string `json:"regionCode"`
 		TimeMillis string `json:"purchaseTimeMillis"`
 		Type       *int   `json:"purchaseType"`
+		Quantity   int64  `json:"quantity"`
 	}
 	u := fmt.Sprintf("%s/applications/%s/purchases/products/%s/tokens/%s", c.Base, url.PathEscape(pkg), url.PathEscape(sku), url.PathEscape(token))
 	if err := c.do(ctx, "GET", u, tok, nil, &res); err != nil {
 		return Purchase{}, err
 	}
-	p := Purchase{State: res.State, OrderID: res.OrderID, RegionCode: res.RegionCode, Test: res.Type != nil}
+	p := Purchase{State: res.State, OrderID: res.OrderID, RegionCode: res.RegionCode, Test: res.Type != nil, Quantity: max(res.Quantity, 1)}
 	if ms, err := strconv.ParseInt(res.TimeMillis, 10, 64); err == nil {
 		p.Time = time.UnixMilli(ms)
 	}
@@ -158,11 +160,12 @@ func (c *Client) Vitals(ctx context.Context, pkg string, from, to time.Time) ([]
 
 // StatsDay is one day from the Play Console bulk reports (installs overview + ratings overview).
 type StatsDay struct {
-	Day        time.Time
-	Installs   int64
-	Uninstalls int64
-	Active     int64
-	Rating     *float64 // total average rating that day
+	Day         time.Time
+	Installs    int64
+	Uninstalls  int64
+	Active      int64
+	Rating      *float64 // total average rating that day
+	HasInstalls bool     // false when the installs report lacked every known column (don't overwrite with zeros)
 }
 
 // BulkStats reads installs and ratings overview CSVs for one month from the Play Console bucket.
@@ -185,10 +188,15 @@ func (c *Client) BulkStats(ctx context.Context, bucket, pkg string, month time.T
 		if k == "" {
 			continue
 		}
+		installKeys := []string{"Daily User Installs", "Daily Device Installs", "Install events"}
+		if !hasAny(row, installKeys...) {
+			continue
+		}
 		d := get(k)
-		d.Installs = firstInt(row, "Daily User Installs", "Daily Device Installs", "Install events")
+		d.HasInstalls = true
+		d.Installs = firstInt(row, installKeys...)
 		d.Uninstalls = firstInt(row, "Daily User Uninstalls", "Daily Device Uninstalls", "Uninstall events")
-		d.Active = firstInt(row, "Active Device Installs", "Total User Installs", "Active Devices")
+		d.Active = firstInt(row, "Active Device Installs", "Active Devices") // not "Total User Installs" (cumulative)
 	}
 	rat, err := c.objectCSV(ctx, bucket, fmt.Sprintf("stats/ratings/ratings_%s_%s_overview.csv", pkg, ym))
 	if err == nil {
@@ -293,4 +301,13 @@ func firstInt(row map[string]string, keys ...string) int64 {
 		}
 	}
 	return 0
+}
+
+func hasAny(row map[string]string, keys ...string) bool {
+	for _, k := range keys {
+		if _, ok := row[k]; ok {
+			return true
+		}
+	}
+	return false
 }

@@ -42,7 +42,7 @@ func newServerWith(t *testing.T, configure func(*api.Server)) (*httptest.Server,
 	}
 	if _, err := st.DB.Exec(ctx, `TRUNCATE tickets, ticket_messages, feature_votes, features, checklist_items, todos,
 		builds, daily_stats, campaigns, guides, ad_accounts, campaign_days, installs, purchases, reviews, app_events,
-		public_hits, ip_hits, campaign_log, vitals, integrations RESTART IDENTITY CASCADE`); err != nil {
+		public_hits, ip_hits, campaign_log, vitals, integrations, audit_log RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	as := &api.Server{Store: st, OwnerToken: token}

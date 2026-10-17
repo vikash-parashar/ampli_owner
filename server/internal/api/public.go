@@ -139,6 +139,7 @@ func (s *Server) publicFeatures(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, publicFeature{ID: t.ID, Title: t.Title, Status: t.Status, Votes: t.Votes})
 	}
+	w.Header().Set("Cache-Control", "public, max-age=300") // apps and CDNs may reuse it for 5 minutes
 	writeJSON(w, http.StatusOK, out)
 }
 
