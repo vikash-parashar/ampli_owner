@@ -88,23 +88,8 @@ data class DayStat(
     @SerialName("pro_sales") val proSales: Int = 0,
     @SerialName("pro_revenue_paise") val proRevenuePaise: Long = 0,
     @SerialName("ad_revenue_paise") val adRevenuePaise: Long = 0,
-)
-
-@Serializable
-data class Campaign(
-    val id: Long = 0,
-    val platform: String,
-    val product: String? = null,
-    val name: String,
-    val status: String = "draft",
-    @SerialName("budget_paise") val budgetPaise: Long = 0,
-    @SerialName("spend_paise") val spendPaise: Long = 0,
-    val impressions: Long = 0,
-    val clicks: Long = 0,
-    val installs: Long = 0,
-    @SerialName("post_url") val postUrl: String = "",
-    @SerialName("starts_on") val startsOn: String? = null,
-    @SerialName("ends_on") val endsOn: String? = null,
+    @SerialName("tips_paise") val tipsPaise: Long = 0,
+    @SerialName("other_revenue_paise") val otherRevenuePaise: Long = 0,
 )
 
 @Serializable
@@ -148,6 +133,34 @@ fun grouped(n: Long): String {
 fun rupees(paise: Long): String {
     val r = paise / 100
     return if (r < 0) "-₹" + grouped(-r) else "₹" + grouped(r)
+}
+
+/** One decimal, without a trailing ".0": 1.0 -> "1", 1.25 -> "1.3". */
+private fun oneDecimal(d: Double): String {
+    val s = String.format(java.util.Locale.US, "%.1f", d)
+    return if (s.endsWith(".0")) s.dropLast(2) else s
+}
+
+/** Short money for tight boxes: up to ₹99,999 in full, then ₹12.3L (lakh) and ₹4.5Cr (crore). */
+fun compactRupees(paise: Long): String {
+    val r = kotlin.math.abs(paise / 100)
+    val sign = if (paise < 0) "-" else ""
+    return when {
+        r < 100_000L -> sign + "₹" + grouped(r)
+        r < 10_000_000L -> sign + "₹" + oneDecimal(r / 100_000.0) + "L"
+        else -> sign + "₹" + oneDecimal(r / 10_000_000.0) + "Cr"
+    }
+}
+
+/** Short counts: up to 9,99,999 in full, then 12.5L and 1.2Cr. */
+fun compactCount(n: Long): String {
+    val a = kotlin.math.abs(n)
+    val sign = if (n < 0) "-" else ""
+    return when {
+        a < 1_000_000L -> grouped(n)
+        a < 10_000_000L -> sign + oneDecimal(a / 100_000.0) + "L"
+        else -> sign + oneDecimal(a / 10_000_000.0) + "Cr"
+    }
 }
 
 // ---------------- API v2: dashboard, ads manager, reviews (docs/api-v2.md) ----------------
@@ -220,6 +233,26 @@ data class Dashboard(
     val ads: AdsSummary = AdsSummary(),
     val widgets: List<Widget> = emptyList(),
     val products: List<ProductSummary> = emptyList(),
+    /** Latest Play vitals for one product; null when unknown (and for "all"). Rates are fractions: 0.0042 = 0.42%. */
+    val vitals: Vitals? = null,
+)
+
+@Serializable
+data class Vitals(
+    val day: String = "",
+    @SerialName("crash_rate") val crashRate: Double? = null,
+    @SerialName("anr_rate") val anrRate: Double? = null,
+)
+
+/** One "Needs your attention" item from GET /v1/alerts. */
+@Serializable
+data class Alert(
+    val id: String = "",
+    val severity: String = "low", // high | medium | low
+    val product: String = "",
+    val title: String = "",
+    val detail: String = "",
+    val action: String = "", // open_ads | open_reviews | open_inbox | open_settings | ""
 )
 
 @Serializable
@@ -241,6 +274,7 @@ data class AdsPlatform(
     val sub: String = "",
     val configured: Boolean = false,
     val accounts: List<AdAccount> = emptyList(),
+    @SerialName("min_daily_budget_paise") val minDailyBudgetPaise: Long = 0,
 )
 
 @Serializable
@@ -271,6 +305,77 @@ data class AdCampaign(
     @SerialName("ad_account_id") val adAccountId: Long? = null,
     @SerialName("utm_campaign") val utmCampaign: String = "",
     @SerialName("last_error") val lastError: String = "",
+    @SerialName("auto_stop") val autoStop: AutoStop = AutoStop(),
+    /** link = matched by our link, estimate = matched by platform and time, none = no installs matched yet. */
+    val attribution: String = "none",
+)
+
+/** Pause a campaign automatically once ROAS < [minRoas] after [minDays] days and [minSpendPaise] spent. */
+@Serializable
+data class AutoStop(
+    val enabled: Boolean = false,
+    @SerialName("min_roas") val minRoas: Double = 0.5,
+    @SerialName("min_days") val minDays: Int = 7,
+    @SerialName("min_spend_paise") val minSpendPaise: Long = 200000,
+)
+
+@Serializable
+data class CampaignLogEntry(
+    val id: Long = 0,
+    @SerialName("campaign_id") val campaignId: Long = 0,
+    val actor: String = "", // owner | rule | sync
+    val action: String = "",
+    val detail: String = "",
+    @SerialName("created_at") val createdAt: String = "",
+)
+
+/** POST /v1/ads/sync and /v1/reviews/sync: how many synced, plus any problems. */
+@Serializable
+data class SyncResult(
+    val synced: Int = 0,
+    val errors: List<String> = emptyList(),
+)
+
+@Serializable
+data class AdmobStatus(
+    val configured: Boolean = false,
+    val connected: Boolean = false,
+    val account: String = "",
+    @SerialName("last_sync_at") val lastSyncAt: String? = null,
+    @SerialName("last_error") val lastError: String = "",
+)
+
+@Serializable
+data class PlayStatus(
+    val configured: Boolean = false,
+    @SerialName("last_sync_at") val lastSyncAt: String? = null,
+    @SerialName("last_error") val lastError: String = "",
+)
+
+@Serializable
+data class Integrations(
+    val admob: AdmobStatus = AdmobStatus(),
+    val play: PlayStatus = PlayStatus(),
+)
+
+@Serializable
+data class IntegrationsSync(
+    @SerialName("admob_days") val admobDays: Int = 0,
+    val vitals: Int = 0,
+    val reviews: Int = 0,
+    @SerialName("play_days") val playDays: Int = 0,
+    /** Refunds found by Play's voided-purchases report and taken off revenue. */
+    val refunds: Int = 0,
+    val errors: List<String> = emptyList(),
+)
+
+/** A Play product and its price; the server takes purchase prices from this table, not from the app. */
+@Serializable
+data class Sku(
+    val product: String = "mp3",
+    val sku: String = "",
+    val kind: String = "pro", // pro | tip | subscription | other
+    @SerialName("price_paise") val pricePaise: Long = 0,
 )
 
 @Serializable

@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
@@ -154,41 +156,54 @@ private fun NumField(label: String, value: String, onChange: (String) -> Unit) {
 
 private fun paise(rupees: String) = ((rupees.toDoubleOrNull() ?: 0.0) * 100).toLong()
 
-/** Enter one day's installs and money for a product (opened from the Dashboard). */
+/** Enter one day's installs, users and money for a product (opened from the Dashboard). */
 @Composable
-fun DayDialog(onDismiss: () -> Unit, onSave: (DayStat) -> Unit) {
-    var product by remember { mutableStateOf("mp3") }
+fun DayDialog(startProduct: String, onDismiss: () -> Unit, onSave: (DayStat) -> Unit) {
+    var product by remember { mutableStateOf(if (startProduct in Products.names.keys) startProduct else "mp3") }
     var day by remember { mutableStateOf(LocalDate.now().minusDays(1).toString()) }
     var installs by remember { mutableStateOf("") }
     var uninstalls by remember { mutableStateOf("") }
+    var active by remember { mutableStateOf("") }
+    var reviews by remember { mutableStateOf("") }
     var sales by remember { mutableStateOf("") }
     var pro by remember { mutableStateOf("") }
     var ads by remember { mutableStateOf("") }
+    var tips by remember { mutableStateOf("") }
+    var other by remember { mutableStateOf("") }
     var rating by remember { mutableStateOf("") }
     val validDay = runCatching { LocalDate.parse(day) }.isSuccess
+    val ratingValue = rating.toDoubleOrNull()
+    val validRating = rating.isBlank() || (ratingValue != null && ratingValue in 1.0..5.0)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("A day's numbers") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                ChoiceRow(Products.names.toList(), product) { product = it }
+            // Scrolls, so every field is reachable with the keyboard open on a small phone.
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                ChoiceRow(Products.names.keys.map { it to Products.short(it) }, product) { product = it }
                 OutlinedTextField(day, { day = it }, label = { Text("Day (YYYY-MM-DD)") }, singleLine = true, isError = !validDay)
                 NumField("Installs", installs) { installs = it }
                 NumField("Uninstalls", uninstalls) { uninstalls = it }
+                NumField("Active users that day", active) { active = it }
+                NumField("New reviews", reviews) { reviews = it }
+                NumField("Rating (1-5)", rating) { rating = it }
                 NumField("Pro sales", sales) { sales = it }
                 NumField("Pro revenue ₹ (after Google's cut)", pro) { pro = it }
-                NumField("Ad revenue ₹", ads) { ads = it }
-                NumField("Rating", rating) { rating = it }
+                NumField("Ad revenue ₹ (AdMob)", ads) { ads = it }
+                NumField("Tips ₹", tips) { tips = it }
+                NumField("Other income ₹", other) { other = it }
             }
         },
         confirmButton = {
-            TextButton(enabled = validDay, onClick = {
+            TextButton(enabled = validDay && validRating, onClick = {
                 onSave(
                     DayStat(
                         product = product, day = day,
-                        installs = installs.toDoubleOrNull()?.toInt() ?: 0, uninstalls = uninstalls.toDoubleOrNull()?.toInt() ?: 0,
-                        proSales = sales.toDoubleOrNull()?.toInt() ?: 0, proRevenuePaise = paise(pro), adRevenuePaise = paise(ads),
-                        rating = rating.toDoubleOrNull(),
+                        installs = count(installs), uninstalls = count(uninstalls),
+                        activeUsers = count(active), reviews = count(reviews),
+                        rating = ratingValue,
+                        proSales = count(sales), proRevenuePaise = paise(pro), adRevenuePaise = paise(ads),
+                        tipsPaise = paise(tips), otherRevenuePaise = paise(other),
                     ),
                 )
             }) { Text("Save") }
@@ -196,3 +211,5 @@ fun DayDialog(onDismiss: () -> Unit, onSave: (DayStat) -> Unit) {
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+
+private fun count(s: String) = s.toDoubleOrNull()?.toInt() ?: 0

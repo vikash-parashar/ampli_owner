@@ -106,6 +106,7 @@ private fun TicketRow(t: Ticket, onClick: () -> Unit) {
 @Composable
 fun TicketScreen(nav: Nav, id: Long, modifier: Modifier) {
     var reply by rememberSaveable(id) { mutableStateOf("") }
+    var sending by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     Loadable(nav.tick to id, { nav.repo.ticket(id) }, nav::refresh) { d ->
         val t = d.ticket
@@ -166,11 +167,16 @@ fun TicketScreen(nav: Nav, id: Long, modifier: Modifier) {
                 )
             }
             item {
-                Button(enabled = reply.isNotBlank(), onClick = {
+                Button(enabled = reply.isNotBlank() && !sending, onClick = {
                     val body = reply.trim()
-                    reply = ""
-                    nav.run("Sent") { nav.repo.reply(id, body) }
-                }) { Text("Send") }
+                    sending = true
+                    // The text stays in the box until the server has it, so a failed send loses nothing.
+                    nav.send(
+                        done = "Sent",
+                        onOk = { sending = false; reply = "" },
+                        onFail = { msg -> sending = false; nav.toast(msg) },
+                    ) { nav.repo.reply(id, body) }
+                }) { Text(if (sending) "Sending…" else "Send") }
             }
         }
     }

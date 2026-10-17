@@ -39,9 +39,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableIntState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -51,13 +57,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.CancellationException
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
 
+/** Counts reloads that run behind stale content; OwnerApp shows a thin progress bar while it is above 0. */
+val LocalBusy = staticCompositionLocalOf<MutableIntState?> { null }
+
 /**
  * Loads [load] whenever [key] changes and shows a spinner, an error with retry, or [content].
- * With [keepStale] the last result stays on screen while a reload runs (no spinner flash after an action).
+ * With [keepStale] the last result stays on screen while a reload runs (no spinner flash after an action,
+ * a thin bar under the top bar instead).
  */
 @Composable
 fun <T> Loadable(
@@ -67,9 +82,22 @@ fun <T> Loadable(
     keepStale: Boolean = false,
     content: @Composable (T) -> Unit,
 ) {
-    val state by produceState<Result<T>?>(initialValue = null, key) {
-        if (!keepStale) value = null
-        value = runCatching { load() }
+    var state by remember { mutableStateOf<Result<T>?>(null) }
+    val busy = LocalBusy.current
+    LaunchedEffect(key) {
+        val behindStale = keepStale && state != null
+        if (!keepStale) state = null
+        if (behindStale) busy?.let { it.intValue = it.intValue + 1 }
+        try {
+            val v = load()
+            state = Result.success(v)
+        } catch (e: CancellationException) {
+            throw e // leaving the screen is not an error
+        } catch (e: Exception) {
+            state = Result.failure(e)
+        } finally {
+            if (behindStale) busy?.let { it.intValue = (it.intValue - 1).coerceAtLeast(0) }
+        }
     }
     when (val r = state) {
         null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
@@ -82,11 +110,32 @@ fun <T> Loadable(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text("Couldn't load this", style = MaterialTheme.typography.titleMedium)
-                    Text(e.message ?: e.javaClass.simpleName, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(e.message ?: e.javaClass.simpleName, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
                     Button(onClick = onRetry, modifier = Modifier.padding(top = 12.dp)) { Text("Try again") }
                 }
             },
         )
+    }
+}
+
+/** Runs [onResume] each time the screen comes back to the front (not on the first show). */
+@Composable
+fun OnResume(onResume: () -> Unit) {
+    val owner = LocalLifecycleOwner.current
+    val latest by rememberUpdatedState(onResume)
+    DisposableEffect(owner) {
+        var first = true
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                if (first) {
+                    first = false
+                } else {
+                    latest()
+                }
+            }
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer) }
     }
 }
 
@@ -217,7 +266,7 @@ fun SmallButton(text: String, kind: BtnKind = BtnKind.Primary, modifier: Modifie
     val a = ampli()
     val primary = accent()
     val colors: Pair<Color, Color> = when (kind) {
-        BtnKind.Primary -> Pair(primary, Color.White)
+        BtnKind.Primary -> Pair(deepen(primary), Color.White)
         BtnKind.Ghost -> Pair(a.surface2, a.text)
         BtnKind.Ok -> Pair(a.goodBg, a.good)
         BtnKind.Bad -> Pair(a.badBg, a.bad)
@@ -242,7 +291,7 @@ fun SmallButton(text: String, kind: BtnKind = BtnKind.Primary, modifier: Modifie
 
 /**
  * A stat box from the 2x2 grid. Label sits top-left; the number (and its note) sits bottom-right,
- * right-aligned. An optional sparkline sits bottom-left.
+ * right-aligned. An optional sparkline is overlaid bottom-left, so it never takes width from the number.
  */
 @Composable
 fun StatBox(
@@ -279,15 +328,20 @@ fun StatBox(
                 )
             }
             Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+            Box(Modifier.fillMaxWidth()) {
                 if (spark != null && spark.size >= 2) {
-                    Sparkline(spark, dotColor, sparkKey, Modifier.padding(bottom = 2.dp).size(width = 58.dp, height = 26.dp))
+                    Sparkline(
+                        spark, dotColor.copy(alpha = 0.6f), sparkKey,
+                        Modifier.align(Alignment.BottomStart).padding(bottom = 2.dp).size(width = 58.dp, height = 26.dp),
+                    )
                 }
-                Spacer(Modifier.weight(1f))
-                Column(horizontalAlignment = Alignment.End) {
+                Column(Modifier.align(Alignment.BottomEnd), horizontalAlignment = Alignment.End) {
                     value()
                     if (delta != null) {
-                        Text(delta, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = deltaColor, textAlign = TextAlign.End, maxLines = 1)
+                        Text(
+                            delta, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = deltaColor,
+                            textAlign = TextAlign.End, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
             }
@@ -295,25 +349,35 @@ fun StatBox(
     }
 }
 
+/** The stat number's size for [text]: 24sp, shrinking a little for long numbers so a 360 dp phone never clips. */
+fun statSize(text: String): TextUnit = when {
+    text.length <= 7 -> 24.sp
+    text.length == 8 -> 22.sp
+    text.length == 9 -> 20.sp
+    else -> 18.sp
+}
+
 /** Big right-aligned number used inside [StatBox]. */
 @Composable
 fun StatNumber(text: String, color: Color = Color.Unspecified) {
-    Text(text, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-0.6).sp, textAlign = TextAlign.End, maxLines = 1, color = color)
+    Text(
+        text, fontSize = statSize(text), fontWeight = FontWeight.ExtraBold, letterSpacing = (-0.6).sp,
+        textAlign = TextAlign.End, maxLines = 1, color = color,
+    )
 }
 
-/** A small legend row: coloured square + label. */
+/** A small legend row: coloured square + label. Wraps onto a second line on narrow screens. */
 @Composable
 fun Legend(items: List<Pair<String, Color>>, modifier: Modifier = Modifier) {
-    Row(
-        modifier.fillMaxWidth().padding(top = 8.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        items.forEachIndexed { i, (label, color) ->
-            if (i > 0) Spacer(Modifier.width(14.dp))
-            Box(Modifier.size(10.dp).clip(RoundedCornerShape(3.dp)).background(color))
-            Spacer(Modifier.width(5.dp))
-            Text(label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = ampli().muted, maxLines = 1)
+    Box(modifier.fillMaxWidth().padding(top = 8.dp), contentAlignment = Alignment.Center) {
+        Wrap(spacing = 12.dp, center = true) {
+            items.forEach { (label, color) ->
+                Row(Modifier.padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(10.dp).clip(RoundedCornerShape(3.dp)).background(color))
+                    Spacer(Modifier.width(5.dp))
+                    Text(label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = ampli().muted, maxLines = 1)
+                }
+            }
         }
     }
 }
@@ -381,7 +445,7 @@ fun ProductSwitcher(selected: String, onSelect: (String) -> Unit, modifier: Modi
         animationSpec = spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow),
         label = "pill",
     )
-    val pillColor by animateColorAsState(a.product(selected), tween(350), label = "pillColor")
+    val pillColor by animateColorAsState(deepen(a.product(selected)), tween(350), label = "pillColor")
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
@@ -426,7 +490,7 @@ fun ProductSwitcher(selected: String, onSelect: (String) -> Unit, modifier: Modi
 /** The hero card: product-coloured gradient with a floating glow and a shine sweep. */
 @Composable
 fun HeroCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    val color = accent()
+    val color = accentFill()
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),

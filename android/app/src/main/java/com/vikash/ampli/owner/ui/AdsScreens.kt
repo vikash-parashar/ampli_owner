@@ -24,10 +24,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -36,10 +38,13 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -55,6 +60,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -64,11 +70,16 @@ import com.vikash.ampli.owner.data.AdAccount
 import com.vikash.ampli.owner.data.AdCampaign
 import com.vikash.ampli.owner.data.AdsCampaignsResponse
 import com.vikash.ampli.owner.data.AdsPlatform
+import com.vikash.ampli.owner.data.AutoStop
+import com.vikash.ampli.owner.data.CampaignLogEntry
 import com.vikash.ampli.owner.data.Creative
 import com.vikash.ampli.owner.data.NewCampaign
 import com.vikash.ampli.owner.data.Products
+import com.vikash.ampli.owner.data.compactCount
+import com.vikash.ampli.owner.data.compactRupees
 import com.vikash.ampli.owner.data.grouped
 import com.vikash.ampli.owner.data.rupees
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 private data class PlatformLook(val name: String, val sub: String, val bg: Color, val letter: String)
@@ -108,6 +119,12 @@ private fun PlatformLogo(id: String, size: Dp = 38.dp) {
     }
 }
 
+/** The platform's lowest daily budget in rupees (server sends paise; never under ₹100). */
+private fun minBudgetRupees(p: AdsPlatform?): Long {
+    val r = (p?.minDailyBudgetPaise ?: 0L) / 100L
+    return if (r < 100L) 100L else r
+}
+
 @Composable
 fun AdsScreen(nav: Nav, modifier: Modifier) {
     val product = nav.product
@@ -115,6 +132,16 @@ fun AdsScreen(nav: Nav, modifier: Modifier) {
     var wizard by remember { mutableStateOf(false) }
     var connecting by remember { mutableStateOf<AdsPlatform?>(null) }
     var disconnecting by remember { mutableStateOf<AdAccount?>(null) }
+    var picking by remember { mutableStateOf<List<AdAccount>?>(null) }
+    var budgetFor by remember { mutableStateOf<AdCampaign?>(null) }
+    var historyFor by remember { mutableStateOf<AdCampaign?>(null) }
+    var deleteFor by remember { mutableStateOf<AdCampaign?>(null) }
+    var ruleFor by remember { mutableStateOf<AdCampaign?>(null) }
+    // Null until the first load: the New campaign button needs the platforms (accounts, minimum budgets).
+    var platforms by remember { mutableStateOf<List<AdsPlatform>?>(null) }
+
+    // Coming back from a browser sign-in: show the new account straight away.
+    OnResume { nav.refresh() }
 
     Box(modifier.fillMaxSize()) {
         Loadable(
@@ -123,34 +150,51 @@ fun AdsScreen(nav: Nav, modifier: Modifier) {
             onRetry = nav::refresh,
             keepStale = true,
         ) { loaded ->
+            val ps = loaded.second.platforms
+            SideEffect { platforms = ps }
             AdsContent(
                 nav = nav,
                 key = loaded.first,
                 data = loaded.second,
                 onConnect = { connecting = it },
-                onDisconnect = { disconnecting = it },
+                onDisconnect = { accounts ->
+                    if (accounts.size == 1) {
+                        disconnecting = accounts[0]
+                    } else {
+                        picking = accounts
+                    }
+                },
+                actions = CampaignActions(
+                    budget = { budgetFor = it },
+                    history = { historyFor = it },
+                    delete = { deleteFor = it },
+                    rule = { ruleFor = it },
+                ),
+            )
+        }
+        val ready = platforms
+        if (ready != null) {
+            val pop = rememberEnter(Unit, 500, 150, EaseOutBack)
+            ExtendedFloatingActionButton(
+                onClick = { wizard = true },
+                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                text = { Text("New campaign", fontWeight = FontWeight.ExtraBold) },
+                containerColor = accentFill(),
+                contentColor = Color.White,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp)
+                    .graphicsLayer {
+                        val p = pop.value
+                        scaleX = 0.6f + 0.4f * p
+                        scaleY = 0.6f + 0.4f * p
+                        alpha = p.coerceIn(0f, 1f)
+                    },
             )
             if (wizard) {
-                NewCampaignSheet(nav = nav, platforms = loaded.second.platforms, startProduct = product, onClose = { wizard = false })
+                NewCampaignSheet(nav = nav, platforms = ready, startProduct = product, onClose = { wizard = false })
             }
         }
-        val pop = rememberEnter(Unit, 500, 150, EaseOutBack)
-        ExtendedFloatingActionButton(
-            onClick = { wizard = true },
-            icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-            text = { Text("New campaign", fontWeight = FontWeight.ExtraBold) },
-            containerColor = accent(),
-            contentColor = Color.White,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(16.dp)
-                .graphicsLayer {
-                    val p = pop.value
-                    scaleX = 0.6f + 0.4f * p
-                    scaleY = 0.6f + 0.4f * p
-                    alpha = p.coerceIn(0f, 1f)
-                },
-        )
     }
 
     connecting?.let { p ->
@@ -192,6 +236,27 @@ fun AdsScreen(nav: Nav, modifier: Modifier) {
         }
     }
 
+    // Several accounts on one platform: pick which one to disconnect.
+    picking?.let { accounts ->
+        AlertDialog(
+            onDismissRequest = { picking = null },
+            title = { Text("Which account?") },
+            text = {
+                Column {
+                    accounts.forEach { acc ->
+                        TextButton(onClick = { picking = null; disconnecting = acc }, modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                acc.name.ifBlank { acc.externalId } + if (acc.externalId.isNotBlank()) " · ${acc.externalId}" else "",
+                                modifier = Modifier.fillMaxWidth(), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { picking = null }) { Text("Cancel") } },
+        )
+    }
+
     disconnecting?.let { acc ->
         AlertDialog(
             onDismissRequest = { disconnecting = null },
@@ -206,7 +271,36 @@ fun AdsScreen(nav: Nav, modifier: Modifier) {
             dismissButton = { TextButton(onClick = { disconnecting = null }) { Text("Cancel") } },
         )
     }
+
+    budgetFor?.let { c ->
+        val minRupees = minBudgetRupees(platforms?.firstOrNull { it.id == c.platform })
+        BudgetDialog(nav, c, minRupees) { budgetFor = null }
+    }
+    historyFor?.let { c -> HistorySheet(nav, c) { historyFor = null } }
+    ruleFor?.let { c -> AutoStopDialog(nav, c) { ruleFor = null } }
+    deleteFor?.let { c ->
+        AlertDialog(
+            onDismissRequest = { deleteFor = null },
+            title = { Text("Delete this campaign?") },
+            text = { Text("\"${c.name}\" is paused on ${look(c.platform).name} first, then removed from Ampli Owner. This can't be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    deleteFor = null
+                    nav.run("Campaign deleted") { nav.repo.deleteCampaign(c.id) }
+                }) { Text("Delete", color = ampli().bad) }
+            },
+            dismissButton = { TextButton(onClick = { deleteFor = null }) { Text("Cancel") } },
+        )
+    }
 }
+
+/** What a campaign row can open. */
+private class CampaignActions(
+    val budget: (AdCampaign) -> Unit,
+    val history: (AdCampaign) -> Unit,
+    val delete: (AdCampaign) -> Unit,
+    val rule: (AdCampaign) -> Unit,
+)
 
 @Composable
 private fun AdsContent(
@@ -214,18 +308,20 @@ private fun AdsContent(
     key: String,
     data: AdsData,
     onConnect: (AdsPlatform) -> Unit,
-    onDisconnect: (AdAccount) -> Unit,
+    onDisconnect: (List<AdAccount>) -> Unit,
+    actions: CampaignActions,
 ) {
     val a = ampli()
     val s = data.ads.summary
     val campaigns = data.ads.campaigns
+    val noSpend = s.spendPaise == 0L
     ScrollPage(Modifier, key) {
         var n = 0
 
         // ---- hero: earned from ads ----
         HeroCard(Modifier.rise(key, n++)) {
             Text(
-                (if (key == "all") "Ads for all apps" else "Ads for ${Products.short(key)}") + " · last 30 days",
+                (if (key == "all") "Ads for all apps" else "Ads for ${Products.short(key)}") + " · so far",
                 color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp, fontWeight = FontWeight.Bold,
             )
             CountUpText(
@@ -233,36 +329,37 @@ private fun AdsContent(
                 modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
                 style = HeroStyle, color = Color.White, textAlign = TextAlign.End,
             )
-            Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.Bottom) {
-                Chip("earned from ${rupees(s.spendPaise)} spent", Color.White.copy(alpha = 0.2f), Color.White)
+            Row(Modifier.fillMaxWidth().padding(top = 10.dp)) {
                 Spacer(Modifier.weight(1f))
-                Text(
-                    if (s.profitPaise >= 0) "Profit ${rupees(s.profitPaise)}" else "Loss ${rupees(-s.profitPaise)}",
-                    color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
-                )
+                Chip("earned from ${compactRupees(s.spendPaise)} spent", Color.White.copy(alpha = 0.2f), Color.White)
             }
+            Text(
+                if (noSpend) "No spend yet" else if (s.profitPaise >= 0) "Profit ${rupees(s.profitPaise)}" else "Loss ${rupees(-s.profitPaise)}",
+                color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1,
+                textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            )
         }
 
         // ---- 4 stat boxes ----
         Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             StatBox("Money invested", Modifier.weight(1f).fillMaxHeight().rise(key, n++)) {
-                CountUpText(s.spendPaise.toDouble(), key, { rupees(it.toLong()) }, style = StatStyle, textAlign = TextAlign.End)
+                StatCountUp(s.spendPaise.toDouble(), key) { compactRupees(it.toLong()) }
             }
             StatBox(
                 label = "Return (ROAS)",
                 modifier = Modifier.weight(1f).fillMaxHeight().rise(key, n++),
-                delta = if (s.roas >= 1.0) "ads pay for themselves" else "losing money",
-                deltaColor = if (s.roas >= 1.0) a.good else a.bad,
+                delta = if (noSpend) "no spend yet" else if (s.roas >= 1.0) "ads pay for themselves" else "losing money",
+                deltaColor = if (noSpend) a.muted else if (s.roas >= 1.0) a.good else a.bad,
             ) {
-                StatNumber(f2(s.roas) + "x")
+                if (noSpend) StatNumber("–", a.muted) else StatNumber(f2(s.roas) + "x")
             }
         }
         Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             StatBox("Installs from ads", Modifier.weight(1f).fillMaxHeight().rise(key, n++)) {
-                CountUpText(s.installs.toDouble(), key, { grouped(it.toLong()) }, style = StatStyle, textAlign = TextAlign.End)
+                StatCountUp(s.installs.toDouble(), key) { compactCount(it.toLong()) }
             }
             StatBox("Cost per install", Modifier.weight(1f).fillMaxHeight().rise(key, n++)) {
-                StatNumber("₹" + f2(s.cpiPaise / 100.0))
+                if (s.installs == 0L) StatNumber("–", a.muted) else StatNumber("₹" + f2(s.cpiPaise / 100.0))
             }
         }
 
@@ -289,8 +386,8 @@ private fun AdsContent(
                     Spacer(Modifier.width(8.dp))
                     if (connected.isNotEmpty()) {
                         Chip(
-                            "● Connected", a.goodBg, a.good,
-                            Modifier.clip(RoundedCornerShape(50)).clickable { onDisconnect(connected[0]) },
+                            if (connected.size > 1) "● ${connected.size} connected" else "● Connected", a.goodBg, a.good,
+                            Modifier.clip(RoundedCornerShape(50)).clickable { onDisconnect(connected) },
                         )
                     } else {
                         SmallButton("Connect", BtnKind.Primary) { onConnect(p) }
@@ -311,7 +408,7 @@ private fun AdsContent(
             }
             campaigns.forEachIndexed { i, c ->
                 if (i > 0) HorizontalDivider(color = a.line, modifier = Modifier.padding(vertical = 12.dp))
-                CampaignItem(nav, c)
+                CampaignItem(nav, c, actions)
             }
         }
 
@@ -321,8 +418,9 @@ private fun AdsContent(
             Text(
                 "ROAS = money earned from people who installed through the ad ÷ money spent. " +
                     "1.5x or more says scale, 0.8x to 1.5x says watch, under 0.8x says stop. " +
-                    "Under 5 days of data is too early to judge. Installs and purchases are matched to the ad " +
-                    "through the Play install referrer.",
+                    "Under 5 days of data is too early to judge. Money is net (after Google's fee and GST) " +
+                    "from verified purchases only. Campaigns marked \"Estimate\" have installs matched by platform and time, " +
+                    "not by our link, until the apps send Play install referrers.",
                 fontSize = 11.5.sp, color = a.muted, lineHeight = 17.sp,
             )
         }
@@ -330,7 +428,7 @@ private fun AdsContent(
 }
 
 @Composable
-private fun CampaignItem(nav: Nav, c: AdCampaign) {
+private fun CampaignItem(nav: Nav, c: AdCampaign, actions: CampaignActions) {
     val a = ampli()
     val l = look(c.platform)
     val v = c.verdict
@@ -350,44 +448,89 @@ private fun CampaignItem(nav: Nav, c: AdCampaign) {
         else -> c.status
     }
     val noResults = c.status == "in_review" || c.status == "draft" || c.spendPaise == 0L
-    Column(Modifier.fillMaxWidth().alpha(if (c.status == "paused") 0.55f else 1f)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            PlatformLogo(c.platform, 32.dp)
-            Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                Text(c.name, fontSize = 13.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    c.countries.joinToString(", ") { countryLabel(it) } + " · " + statusText,
-                    fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = a.muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
+    val estimate = c.attribution == "estimate"
+    Column(Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth().alpha(if (c.status == "paused") 0.55f else 1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PlatformLogo(c.platform, 32.dp)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(c.name, fontSize = 13.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        c.countries.joinToString(", ") { countryLabel(it) } + " · " + statusText,
+                        fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = a.muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                // Installs and earnings matched by platform and time, not by our link.
+                if (estimate) {
+                    Chip("Estimate", a.surface2, a.muted)
+                    Spacer(Modifier.width(6.dp))
+                }
+                Chip(v.label.ifBlank { v.code }, chipBg, chipFg)
+            }
+            // 2x2 so nothing is cut short on a 360 dp phone.
+            Row(
+                Modifier.fillMaxWidth().padding(top = 10.dp).height(IntrinsicSize.Min),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                MiniMetric("Spent", compactRupees(c.spendPaise), Color.Unspecified, Modifier.weight(1f).fillMaxHeight())
+                MiniMetric("Installs", compactCount(c.installs), Color.Unspecified, Modifier.weight(1f).fillMaxHeight())
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(top = 6.dp).height(IntrinsicSize.Min),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                MiniMetric("Earned", compactRupees(c.revenuePaise), Color.Unspecified, Modifier.weight(1f).fillMaxHeight())
+                MiniMetric(
+                    "ROAS",
+                    if (noResults) "–" else f2(c.roas) + "x",
+                    if (noResults) a.muted else if (c.roas >= 1.0) a.good else a.bad,
+                    Modifier.weight(1f).fillMaxHeight(),
                 )
             }
-            Spacer(Modifier.width(8.dp))
-            Chip(v.label.ifBlank { v.code }, chipBg, chipFg)
+            val why = if (c.status == "error" && c.lastError.isNotBlank()) c.lastError else v.reason
+            if (why.isNotBlank()) {
+                Text(
+                    why, fontSize = 11.5.sp, color = if (c.status == "error") a.bad else a.muted, lineHeight = 17.sp,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+            if (c.dailyBudgetPaise > 0) {
+                Text(
+                    "Daily budget ${rupees(c.dailyBudgetPaise)} on ${l.name}",
+                    fontSize = 11.sp, color = a.muted, modifier = Modifier.padding(top = 4.dp),
+                )
+            }
         }
+
+        // ---- auto-stop ----
+        val r = c.autoStop
         Row(
-            Modifier.fillMaxWidth().padding(top = 10.dp).height(IntrinsicSize.Min),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            Modifier
+                .fillMaxWidth()
+                .padding(top = 10.dp)
+                .clip(RoundedCornerShape(11.dp))
+                .background(a.surface2)
+                .padding(start = 10.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            MiniMetric("Spent", rupees(c.spendPaise), Color.Unspecified, Modifier.weight(1f).fillMaxHeight())
-            MiniMetric("Installs", grouped(c.installs), Color.Unspecified, Modifier.weight(1f).fillMaxHeight())
-            MiniMetric("Earned", rupees(c.revenuePaise), Color.Unspecified, Modifier.weight(1f).fillMaxHeight())
-            MiniMetric(
-                "ROAS",
-                if (noResults) "–" else f2(c.roas) + "x",
-                if (noResults) Color.Unspecified else if (c.roas >= 1.0) a.good else a.bad,
-                Modifier.weight(1f).fillMaxHeight(),
+            Column(Modifier.weight(1f).clickable { actions.rule(c) }) {
+                Text("Auto-stop", fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "Pause automatically if ROAS stays under ${f1(r.minRoas)}x after ${r.minDays} days and ${rupees(r.minSpendPaise)} spent. Tap to change.",
+                    fontSize = 11.sp, color = a.muted, lineHeight = 15.sp,
+                )
+            }
+            Switch(
+                checked = r.enabled,
+                onCheckedChange = { on ->
+                    nav.run(if (on) "Auto-stop on" else "Auto-stop off") { nav.repo.setAutoStop(c.id, r.copy(enabled = on)) }
+                },
             )
         }
-        val why = if (c.status == "error" && c.lastError.isNotBlank()) c.lastError else v.reason
-        if (why.isNotBlank()) {
-            Text(why, fontSize = 11.5.sp, color = a.muted, lineHeight = 17.sp, modifier = Modifier.padding(top = 8.dp))
-        }
-        if (c.dailyBudgetPaise > 0) {
-            Text(
-                "Daily budget ${rupees(c.dailyBudgetPaise)} on ${l.name}",
-                fontSize = 11.sp, color = a.faint, modifier = Modifier.padding(top = 4.dp),
-            )
-        }
+
+        // ---- actions for this status ----
         Row(
             Modifier.fillMaxWidth().padding(top = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
@@ -395,6 +538,15 @@ private fun CampaignItem(nav: Nav, c: AdCampaign) {
             when (c.status) {
                 "paused", "draft" -> SmallButton("Resume", BtnKind.Ok) {
                     nav.run("Resumed on ${l.name}") { nav.repo.resumeCampaign(c.id) }
+                }
+                "in_review" -> SmallButton("Pause", BtnKind.Ghost) {
+                    nav.run("Paused on ${l.name}") { nav.repo.pauseCampaign(c.id) }
+                }
+                "error" -> {
+                    SmallButton("Retry", BtnKind.Ok) {
+                        nav.run("Sent to ${l.name} again") { nav.repo.resumeCampaign(c.id) }
+                    }
+                    SmallButton("Delete", BtnKind.Bad) { actions.delete(c) }
                 }
                 "live" -> {
                     SmallButton("Pause", BtnKind.Ghost) {
@@ -415,10 +567,18 @@ private fun CampaignItem(nav: Nav, c: AdCampaign) {
                 else -> {}
             }
         }
+        Row(
+            Modifier.fillMaxWidth().padding(top = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+        ) {
+            if (c.status != "ended") SmallButton("Set budget", BtnKind.Ghost) { actions.budget(c) }
+            SmallButton("History", BtnKind.Ghost) { actions.history(c) }
+            if (c.status != "error") SmallButton("Delete", BtnKind.Ghost) { actions.delete(c) }
+        }
     }
 }
 
-/** One of the four small boxes in a campaign: label top-left, value bottom-right. */
+/** One of the small boxes in a campaign: label top-left, value bottom-right. */
 @Composable
 private fun MiniMetric(label: String, value: String, valueColor: Color, modifier: Modifier) {
     val a = ampli()
@@ -427,15 +587,173 @@ private fun MiniMetric(label: String, value: String, valueColor: Color, modifier
             .clip(RoundedCornerShape(11.dp))
             .background(a.surface2)
             .heightIn(min = 50.dp)
-            .padding(horizontal = 8.dp, vertical = 7.dp),
+            .padding(horizontal = 10.dp, vertical = 7.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        Text(label, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = a.muted, textAlign = TextAlign.Start, maxLines = 1)
+        Text(label, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, color = a.muted, textAlign = TextAlign.Start, maxLines = 1)
         Text(
-            value, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = valueColor,
+            value, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = valueColor,
             textAlign = TextAlign.End, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.fillMaxWidth(),
         )
+    }
+}
+
+// ---------------- campaign dialogs ----------------
+
+@Composable
+private fun BudgetDialog(nav: Nav, c: AdCampaign, minRupees: Long, onClose: () -> Unit) {
+    var text by remember { mutableStateOf((c.dailyBudgetPaise / 100L).toString()) }
+    var sending by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val value = text.toLongOrNull()
+    val ok = value != null && value >= minRupees && value <= 100_000L
+    AlertDialog(
+        onDismissRequest = { if (!sending) onClose() },
+        title = { Text("Daily budget") },
+        text = {
+            Column {
+                Text(c.name, fontSize = 12.5.sp, color = ampli().muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    text, { t -> text = t.filter { it.isDigit() }.take(6); error = null },
+                    label = { Text("Rupees per day") }, singleLine = true, enabled = !sending,
+                    isError = text.isNotBlank() && !ok,
+                    supportingText = { Text("${look(c.platform).name}: ₹${grouped(minRupees)} to ₹1,00,000 a day") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                error?.let { Text(it, color = ampli().bad, fontSize = 12.sp) }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = ok && !sending, onClick = {
+                val paise = (value ?: 0L) * 100L
+                sending = true
+                nav.send(
+                    done = "Daily budget set to ${rupees(paise)}",
+                    onOk = { sending = false; onClose() },
+                    onFail = { msg -> sending = false; error = msg },
+                ) { nav.repo.setBudget(c.id, paise) }
+            }) { Text(if (sending) "Saving…" else "Save") }
+        },
+        dismissButton = { TextButton(enabled = !sending, onClick = onClose) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun AutoStopDialog(nav: Nav, c: AdCampaign, onClose: () -> Unit) {
+    val r = c.autoStop
+    var roas by remember { mutableStateOf(f1(r.minRoas)) }
+    var days by remember { mutableStateOf(r.minDays.toString()) }
+    var spend by remember { mutableStateOf((r.minSpendPaise / 100L).toString()) }
+    var sending by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val roasV = roas.toDoubleOrNull()
+    val daysV = days.toIntOrNull()
+    val spendV = spend.toLongOrNull()
+    val ok = roasV != null && roasV > 0.0 && roasV <= 10.0 && daysV != null && daysV in 1..90 && spendV != null && spendV >= 0L
+    AlertDialog(
+        onDismissRequest = { if (!sending) onClose() },
+        title = { Text("Auto-stop rule") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "Every sync checks this campaign and pauses it on ${look(c.platform).name} once all three are true.",
+                    fontSize = 12.sp, color = ampli().muted,
+                )
+                OutlinedTextField(
+                    roas, { t -> roas = t.filter { it.isDigit() || it == '.' }.take(5); error = null },
+                    label = { Text("ROAS under (x)") }, singleLine = true, enabled = !sending,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    days, { t -> days = t.filter { it.isDigit() }.take(2); error = null },
+                    label = { Text("After this many days") }, singleLine = true, enabled = !sending,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    spend, { t -> spend = t.filter { it.isDigit() }.take(7); error = null },
+                    label = { Text("And at least ₹ spent") }, singleLine = true, enabled = !sending,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth(),
+                )
+                error?.let { Text(it, color = ampli().bad, fontSize = 12.sp) }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = ok && !sending, onClick = {
+                val rule = AutoStop(
+                    enabled = true,
+                    minRoas = roasV ?: 0.5,
+                    minDays = daysV ?: 7,
+                    minSpendPaise = (spendV ?: 2000L) * 100L,
+                )
+                sending = true
+                nav.send(
+                    done = "Auto-stop on",
+                    onOk = { sending = false; onClose() },
+                    onFail = { msg -> sending = false; error = msg },
+                ) { nav.repo.setAutoStop(c.id, rule) }
+            }) { Text(if (sending) "Saving…" else "Save and turn on") }
+        },
+        dismissButton = { TextButton(enabled = !sending, onClick = onClose) { Text("Cancel") } },
+    )
+}
+
+/** Who did what to a campaign: you, the auto-stop rule, or a sync. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HistorySheet(nav: Nav, c: AdCampaign, onClose: () -> Unit) {
+    val a = ampli()
+    var entries by remember { mutableStateOf<List<CampaignLogEntry>?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(c.id) {
+        try {
+            entries = nav.repo.campaignLog(c.id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            error = e.message ?: "Couldn't load the history"
+        }
+    }
+    ModalBottomSheet(onDismissRequest = onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(start = 18.dp, end = 18.dp, bottom = 24.dp),
+        ) {
+            Text("History", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
+            Text(c.name, fontSize = 12.sp, color = a.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(12.dp))
+            val list = entries
+            when {
+                error != null -> Text(error ?: "", color = a.bad, fontSize = 13.sp)
+                list == null -> Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+                list.isEmpty() -> Text("Nothing yet.", color = a.muted, fontSize = 13.sp)
+                else -> list.forEachIndexed { i, e ->
+                    if (i > 0) HorizontalDivider(color = a.line)
+                    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.Top) {
+                        val who = when (e.actor) {
+                            "owner" -> "You"
+                            "rule" -> "Auto-stop"
+                            "sync" -> "Sync"
+                            else -> e.actor.replaceFirstChar { it.uppercase() }
+                        }
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "$who · ${e.action.replace('_', ' ')}", fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                            )
+                            if (e.detail.isNotBlank()) Text(e.detail, fontSize = 12.sp, color = a.muted, lineHeight = 17.sp)
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text(ago(e.createdAt), fontSize = 11.sp, color = a.muted, maxLines = 1)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -443,12 +761,23 @@ private fun MiniMetric(label: String, value: String, valueColor: Color, modifier
 
 private val stepNames = listOf("Which app?", "Where?", "Which countries?", "Budget", "Creative", "Review")
 
+private const val HEADLINE_MAX = 120
+private const val TEXT_MAX = 500
+
+private fun validLink(u: String): Boolean {
+    val t = u.trim()
+    return t.startsWith("https://") && t.length > "https://x.y".length && t.length <= 2000 && t.none { it.isWhitespace() }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NewCampaignSheet(nav: Nav, platforms: List<AdsPlatform>, startProduct: String, onClose: () -> Unit) {
     val a = ampli()
     val accentColor = accent()
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // While the server is answering, the sheet can't be swiped away.
+    var sending by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { !sending })
     val scope = rememberCoroutineScope()
 
     val firstConnected: AdsPlatform? = platforms.firstOrNull { it.connectedAccounts().isNotEmpty() }
@@ -470,21 +799,47 @@ private fun NewCampaignSheet(nav: Nav, platforms: List<AdsPlatform>, startProduc
 
     val platform: AdsPlatform? = platforms.firstOrNull { it.id == platformId }
     val platformName = platform?.name ?: (platformId?.let { look(it).name } ?: "")
-    val budgetRupees = budget.toLong()
+    // Each platform has its own lowest daily budget (TikTok ₹1,700, Google ₹1,000, Meta ₹100).
+    val minRupees = minBudgetRupees(platform).toFloat()
+    val maxRupees = maxOf(10000f, minRupees * 5f)
+    val budgetRupees = budget.coerceIn(minRupees, maxRupees).toLong()
     val dayCount = days.toInt()
     val totalRupees = budgetRupees * dayCount
     val chosenGeos = GEOS.filter { it.code in countries }
     val avgCpi = if (chosenGeos.isEmpty()) 6.0 else chosenGeos.sumOf { it.cpiRupees }.toDouble() / chosenGeos.size
     val expectedInstalls = Math.round(totalRupees / avgCpi)
+    val linkOk = validLink(url)
 
     val canNext = when (step) {
         1 -> platformId != null && accountId != null
         2 -> countries.isNotEmpty()
-        4 -> url.isNotBlank()
+        4 -> linkOk && headline.length <= HEADLINE_MAX && body.length <= TEXT_MAX
         else -> true
     }
 
-    ModalBottomSheet(onDismissRequest = onClose, sheetState = sheetState) {
+    fun submit(launch: Boolean) {
+        val acc = accountId ?: return
+        val name = "${Products.short(product)} · $platformName · " + chosenGeos.joinToString(" + ") { it.code }
+        val nc = NewCampaign(
+            product = product,
+            adAccountId = acc,
+            name = name.take(120),
+            countries = chosenGeos.map { it.code },
+            dailyBudgetPaise = budgetRupees * 100,
+            days = dayCount,
+            creative = Creative(kind = kind, url = url.trim(), thumbnailUrl = "", headline = headline.trim(), text = body.trim()),
+            launch = launch,
+        )
+        sending = true
+        error = null
+        nav.send(
+            done = if (launch) "Sent to $platformName for approval" else "Saved as paused",
+            onOk = { sending = false; close() },
+            onFail = { msg -> sending = false; error = msg },
+        ) { nav.repo.createCampaign(nc) }
+    }
+
+    ModalBottomSheet(onDismissRequest = { if (!sending) onClose() }, sheetState = sheetState) {
         Column(
             Modifier
                 .fillMaxWidth()
@@ -526,7 +881,7 @@ private fun NewCampaignSheet(nav: Nav, platforms: List<AdsPlatform>, startProduc
                             val accs = p.connectedAccounts()
                             WizardOption(
                                 title = p.name,
-                                sub = p.sub + if (accs.isEmpty()) " · connect first" else "",
+                                sub = p.sub + (if (accs.isEmpty()) " · connect first" else " · from ₹${grouped(minBudgetRupees(p))}/day"),
                                 selected = platformId == p.id,
                                 enabled = accs.isNotEmpty(),
                             ) {
@@ -554,11 +909,12 @@ private fun NewCampaignSheet(nav: Nav, platforms: List<AdsPlatform>, startProduc
                 3 -> {
                     WizardQuestion("Daily budget")
                     BigValue(rupees(budgetRupees * 100))
+                    val stepsCount = (((maxRupees - minRupees) / 100f).toInt() - 1).coerceAtLeast(0)
                     Slider(
-                        value = budget,
-                        onValueChange = { budget = (Math.round(it / 100f) * 100).toFloat().coerceIn(200f, 10000f) },
-                        valueRange = 200f..10000f,
-                        steps = 97,
+                        value = budgetRupees.toFloat(),
+                        onValueChange = { budget = (Math.round(it / 100f) * 100).toFloat().coerceIn(minRupees, maxRupees) },
+                        valueRange = minRupees..maxRupees,
+                        steps = stepsCount,
                     )
                     WizardQuestion("For how many days")
                     BigValue("$dayCount days")
@@ -568,17 +924,32 @@ private fun NewCampaignSheet(nav: Nav, platforms: List<AdsPlatform>, startProduc
                         valueRange = 3f..30f,
                         steps = 26,
                     )
-                    WizardNote("Total ${rupees(totalRupees * 100)}. You can pause any time from the Ads tab.")
+                    WizardNote(
+                        "Total ${rupees(totalRupees * 100)}. $platformName needs at least ₹${grouped(minRupees.toLong())} a day. " +
+                            "You can pause any time from the Ads tab.",
+                    )
                 }
                 4 -> {
                     ChoiceRow(listOf("video" to "Video", "image" to "Image"), kind) { kind = it }
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
-                        url, { url = it }, label = { Text(if (kind == "video") "Video link (https://…)" else "Image link (https://…)") },
-                        singleLine = true, modifier = Modifier.fillMaxWidth(),
+                        url, { url = it.take(2000) },
+                        label = { Text(if (kind == "video") "Video link (https://…)" else "Image link (https://…)") },
+                        singleLine = true, isError = url.isNotBlank() && !linkOk,
+                        supportingText = { if (url.isNotBlank() && !linkOk) Text("Use a full https:// link with no spaces") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                        modifier = Modifier.fillMaxWidth(),
                     )
-                    OutlinedTextField(headline, { headline = it }, label = { Text("Headline") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(body, { body = it }, label = { Text("Text") }, minLines = 2, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(
+                        headline, { headline = it.take(HEADLINE_MAX) }, label = { Text("Headline") }, singleLine = true,
+                        supportingText = { Text("${headline.length} / $HEADLINE_MAX", textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth()) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        body, { body = it.take(TEXT_MAX) }, label = { Text("Text") }, minLines = 2,
+                        supportingText = { Text("${body.length} / $TEXT_MAX", textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth()) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                     WizardNote("Use a public link to the file. 9:16 video works for Reels, TikTok and Shorts.")
                 }
                 else -> {
@@ -590,39 +961,36 @@ private fun NewCampaignSheet(nav: Nav, platforms: List<AdsPlatform>, startProduc
                     ReviewRow("Total", rupees(totalRupees * 100))
                     ReviewRow("Creative", (if (kind == "video") "Video" else "Image") + if (headline.isNotBlank()) " · ${headline.trim()}" else "")
                     ReviewRow("Expected installs", "about ${grouped(expectedInstalls)}")
-                    WizardNote("Owner creates the campaign on $platformName and tracks installs and purchases with a UTM link.")
+                    WizardNote(
+                        "Owner creates the campaign on $platformName. Its installs and earnings are estimates " +
+                            "until the apps send Play install referrers.",
+                    )
+                    error?.let {
+                        Text(
+                            it, color = a.bad, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                        )
+                    }
                 }
             }
 
+            val last = step == stepNames.lastIndex
             Row(Modifier.fillMaxWidth().padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                SmallButton(if (step == 0) "Cancel" else "Back", BtnKind.Ghost, Modifier.weight(1f)) {
+                SmallButton(if (step == 0) "Cancel" else "Back", BtnKind.Ghost, Modifier.weight(1f), enabled = !sending) {
                     if (step == 0) close() else step -= 1
                 }
                 SmallButton(
-                    if (step == stepNames.lastIndex) "Launch campaign" else "Next",
-                    BtnKind.Primary, Modifier.weight(1f), enabled = canNext,
+                    if (!last) "Next" else if (sending) "Sending…" else "Launch campaign",
+                    BtnKind.Primary, Modifier.weight(1f), enabled = canNext && !sending && (!last || accountId != null),
                 ) {
-                    if (step < stepNames.lastIndex) {
-                        step += 1
-                    } else {
-                        val acc = accountId
-                        if (acc != null) {
-                            val name = "${Products.short(product)} · $platformName · " + chosenGeos.joinToString(" + ") { it.code }
-                            val nc = NewCampaign(
-                                product = product,
-                                adAccountId = acc,
-                                name = name,
-                                countries = chosenGeos.map { it.code },
-                                dailyBudgetPaise = budgetRupees * 100,
-                                days = dayCount,
-                                creative = Creative(kind = kind, url = url.trim(), thumbnailUrl = "", headline = headline.trim(), text = body.trim()),
-                                launch = true,
-                            )
-                            nav.run("Sent to $platformName for approval") { nav.repo.createCampaign(nc) }
-                            close()
-                        }
-                    }
+                    if (!last) step += 1 else submit(launch = true)
                 }
+            }
+            if (last) {
+                SmallButton(
+                    "Save as paused", BtnKind.Ghost, Modifier.fillMaxWidth().padding(top = 8.dp),
+                    enabled = !sending && accountId != null,
+                ) { submit(launch = false) }
             }
         }
     }

@@ -5,7 +5,11 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -22,6 +26,7 @@ import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -34,12 +39,14 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -49,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.vikash.ampli.owner.data.Products
 import com.vikash.ampli.owner.data.Repo
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import java.time.LocalTime
@@ -77,10 +85,17 @@ class Nav(
     val repo: Repo,
     private val scope: CoroutineScope,
     private val snackbar: SnackbarHostState,
+    private val tabState: MutableState<Tab>,
+    private val productState: MutableState<String>,
 ) {
-    var tab by mutableStateOf(Tab.Dashboard)
+    /** Kept in rememberSaveable by OwnerApp, so rotation or a dark-mode switch doesn't reset it. */
+    var tab: Tab
+        get() = tabState.value
+        set(v) { tabState.value = v }
     /** "all", "mp3", "carhub" or "naukri": picked in the switcher, used by Dashboard, Ads and Reviews. */
-    var product by mutableStateOf("all")
+    var product: String
+        get() = productState.value
+        set(v) { productState.value = v }
     val stack = mutableStateListOf<Route>()
     var tick by mutableIntStateOf(0)
         private set
@@ -90,17 +105,48 @@ class Nav(
     fun refresh() { tick++ }
 
     /** Runs a write, refreshes on success, and shows the error otherwise. */
-    fun run(done: String? = null, block: suspend () -> Unit) {
+    fun run(done: String? = null, block: suspend () -> Unit) = send(done, onOk = {}, onFail = null, block = block)
+
+    /**
+     * Like [run], for dialogs that stay open until the server answers: [onOk] runs on success (close the dialog),
+     * [onFail] gets the server's message (show it in the dialog, keep what was typed). Without [onFail] it's a toast.
+     */
+    fun send(done: String?, onOk: () -> Unit, onFail: ((String) -> Unit)?, block: suspend () -> Unit) {
         scope.launch {
-            runCatching { block() }
-                .onSuccess { refresh(); done?.let { snackbar.showSnackbar(it) } }
-                .onFailure { snackbar.showSnackbar(it.message ?: "Something went wrong") }
+            val error: String? = try {
+                block()
+                null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                e.message ?: "Something went wrong"
+            }
+            if (error == null) {
+                onOk()
+                refresh()
+                done?.let { snackbar.showSnackbar(it) }
+            } else if (onFail != null) {
+                onFail(error)
+            } else {
+                snackbar.showSnackbar(error)
+            }
         }
     }
 
     /** Shows a short message without refreshing. */
     fun toast(message: String) {
         scope.launch { snackbar.showSnackbar(message) }
+    }
+
+    /** Follows an alert's action to the right place. */
+    fun open(action: String) {
+        when (action) {
+            "open_ads" -> { stack.clear(); tab = Tab.Ads }
+            "open_reviews" -> { stack.clear(); tab = Tab.Reviews }
+            "open_inbox" -> { stack.clear(); tab = Tab.Inbox }
+            "open_settings" -> { stack.clear(); tab = Tab.Plan; go(Route.Settings) }
+            else -> {}
+        }
     }
 }
 
@@ -115,7 +161,10 @@ private fun greeting(): String {
 fun OwnerApp(repo: Repo, onSettingsSaved: () -> Unit) {
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    val nav = remember(repo) { Nav(repo, scope, snackbar) }
+    val tabState = rememberSaveable { mutableStateOf(Tab.Dashboard) }
+    val productState = rememberSaveable { mutableStateOf("all") }
+    val nav = remember(repo) { Nav(repo, scope, snackbar, tabState, productState) }
+    val busy = remember { mutableIntStateOf(0) }
     val top = nav.stack.lastOrNull()
     BackHandler(enabled = top != null) { nav.back() }
 
@@ -124,8 +173,8 @@ fun OwnerApp(repo: Repo, onSettingsSaved: () -> Unit) {
     val accentColor by animateColorAsState(palette.product(nav.product), tween(350), label = "accent")
     val base = MaterialTheme.colorScheme
 
-    MaterialTheme(colorScheme = base.copy(primary = accentColor, onPrimary = Color.White)) {
-        CompositionLocalProvider(LocalAccent provides accentColor) {
+    MaterialTheme(colorScheme = base.copy(primary = accentColor, onPrimary = onColor(accentColor))) {
+        CompositionLocalProvider(LocalAccent provides accentColor, LocalBusy provides busy) {
             val title = when (top) {
                 is Route.Ticket -> "Ticket"
                 is Route.Product -> Products.name(top.id)
@@ -160,7 +209,11 @@ fun OwnerApp(repo: Repo, onSettingsSaved: () -> Unit) {
                             actions = {
                                 if (!repo.isRemote) SampleChip()
                                 if (top == null && nav.tab == Tab.Ads) IconButton(onClick = {
-                                    nav.run("Ad numbers updated") { nav.repo.syncAds() }
+                                    nav.run {
+                                        val r = nav.repo.syncAds()
+                                        val first = r.errors.firstOrNull()
+                                        nav.toast(if (first != null) first else "Ad numbers updated")
+                                    }
                                 }) {
                                     Icon(Icons.Outlined.Refresh, contentDescription = "Sync ad numbers")
                                 }
@@ -179,6 +232,10 @@ fun OwnerApp(repo: Repo, onSettingsSaved: () -> Unit) {
                                 onSelect = { nav.product = it },
                                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
                             )
+                        }
+                        // A thin bar while a reload runs behind what's on screen (product switch, after an action).
+                        Box(Modifier.fillMaxWidth().height(3.dp)) {
+                            if (busy.intValue > 0) LinearProgressIndicator(Modifier.fillMaxSize())
                         }
                     }
                 },

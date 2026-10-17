@@ -1,8 +1,20 @@
+import java.util.Base64
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+}
+
+/** The release key from CI secrets (base64 keystore), written into the build dir; null when not set. */
+fun releaseKeystore(): java.io.File? {
+    val b64 = System.getenv("OWNER_KEYSTORE_BASE64")
+    if (b64.isNullOrBlank()) return null
+    val f = layout.buildDirectory.file("owner-release.keystore").get().asFile
+    f.parentFile.mkdirs()
+    f.writeBytes(Base64.getMimeDecoder().decode(b64.trim()))
+    return f
 }
 
 android {
@@ -18,19 +30,47 @@ android {
         versionName = "0.1.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
     }
 
-    // One fixed key for test APKs so each build installs over the previous one.
-    // This app is owner-only and never goes to Play, so the test key is the only key.
     signingConfigs {
+        // Local debug builds keep the committed test key.
         getByName("debug") {
             storeFile = file("owner-test.keystore")
             storePassword = "android"
             keyAlias = "owner"
             keyPassword = "android"
         }
+        // Release: the key from GitHub secrets (OWNER_KEYSTORE_BASE64, OWNER_KEYSTORE_PASSWORD, OWNER_KEY_ALIAS,
+        // OWNER_KEY_PASSWORD). Until those secrets exist it falls back to the test key so CI keeps working.
+        create("release") {
+            val ks = releaseKeystore()
+            if (ks != null) {
+                storeFile = ks
+                storePassword = System.getenv("OWNER_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("OWNER_KEY_ALIAS")
+                keyPassword = System.getenv("OWNER_KEY_PASSWORD")
+            } else {
+                storeFile = file("owner-test.keystore")
+                storePassword = "android"
+                keyAlias = "owner"
+                keyPassword = "android"
+            }
+        }
     }
 
     buildTypes {
         debug { signingConfig = signingConfigs.getByName("debug") }
+        release {
+            // No R8: keeps kotlinx.serialization and Compose free of shrinker surprises; the app is small.
+            isMinifyEnabled = false
+            isShrinkResources = false
+            isDebuggable = false
+            signingConfig = signingConfigs.getByName("release")
+        }
+    }
+
+    // assembleRelease runs lint "vital" checks; don't let a lint nit block the phone build.
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
     }
 
     compileOptions {
@@ -46,6 +86,9 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.biometric)
+    // biometric 1.1.0 pulls an old fragment; pin a current one so FragmentActivity matches activity 1.9.
+    implementation(libs.androidx.fragment)
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)

@@ -9,6 +9,8 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 
 // Owner = royal violet (brand final-v2). Products: MP3 rose, Car Hub cyan, Naukri saffron.
 val Violet = Color(0xFF5B3FD1)
@@ -83,6 +85,28 @@ fun ampli(): AmpliColors = LocalAmpli.current
 
 @Composable
 fun accent(): Color = LocalAccent.current
+
+/**
+ * [c] darkened just enough that white text on it reaches 4.5:1 (WCAG AA).
+ * The dark theme's product colours are bright, so fills that carry white text use this.
+ */
+fun deepen(c: Color): Color {
+    var x = c
+    var i = 0
+    // White on a colour with relative luminance L has contrast 1.05 / (L + 0.05); 4.5:1 needs L <= 0.183.
+    while (x.luminance() > 0.17f && i < 24) {
+        x = lerp(x, Color.Black, 0.08f)
+        i++
+    }
+    return x
+}
+
+/** White or the dark text colour, whichever reads better on [c]. */
+fun onColor(c: Color): Color = if (c.luminance() > 0.17f) Color(0xFF17132B) else Color.White
+
+/** The accent as a fill behind white text (buttons, hero, switcher pill, FAB). */
+@Composable
+fun accentFill(): Color = deepen(accent())
 
 private val Light = lightColorScheme(
     primary = Violet, onPrimary = Color.White,

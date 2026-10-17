@@ -1,5 +1,5 @@
 name: android
-# Builds AmpliOwner-N.apk and publishes it as release build-N.
+# Builds AmpliOwner-N.apk (release build type) and publishes it as release build-N.
 on:
   push:
     branches: [main, "claude/**"]
@@ -20,8 +20,15 @@ jobs:
       # GitHub's Ubuntu runners ship with the Android SDK preinstalled.
       - uses: gradle/actions/setup-gradle@v4
       - run: echo "sdk.dir=$ANDROID_HOME" > local.properties
-      - run: chmod +x gradlew && ./gradlew --no-daemon assembleDebug
-      - run: cp app/build/outputs/apk/debug/app-debug.apk "AmpliOwner-${GITHUB_RUN_NUMBER}.apk"
+      # Release build (not debuggable). Signed with the key from these secrets when they are set,
+      # otherwise with the test key in the repo (see app/build.gradle.kts).
+      - run: chmod +x gradlew && ./gradlew --no-daemon assembleRelease
+        env:
+          OWNER_KEYSTORE_BASE64: ${{ secrets.OWNER_KEYSTORE_BASE64 }}
+          OWNER_KEYSTORE_PASSWORD: ${{ secrets.OWNER_KEYSTORE_PASSWORD }}
+          OWNER_KEY_ALIAS: ${{ secrets.OWNER_KEY_ALIAS }}
+          OWNER_KEY_PASSWORD: ${{ secrets.OWNER_KEY_PASSWORD }}
+      - run: cp app/build/outputs/apk/release/app-release.apk "AmpliOwner-${GITHUB_RUN_NUMBER}.apk"
       - uses: actions/upload-artifact@v4
         with: { name: AmpliOwner-apk, path: android/AmpliOwner-*.apk }
       # A release gives a direct download link that opens on the phone.

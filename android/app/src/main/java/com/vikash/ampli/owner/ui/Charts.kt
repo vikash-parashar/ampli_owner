@@ -377,9 +377,9 @@ fun SentimentGauge(parts: List<Pair<Float, Color>>, key: Any?) {
     }
 }
 
-/** Lays children out left to right and wraps to a new line when full (for tag chips). */
+/** Lays children out left to right and wraps to a new line when full (for tag chips). [center] centres each line. */
 @Composable
-fun Wrap(modifier: Modifier = Modifier, spacing: Dp = 6.dp, content: @Composable () -> Unit) {
+fun Wrap(modifier: Modifier = Modifier, spacing: Dp = 6.dp, center: Boolean = false, content: @Composable () -> Unit) {
     Layout(content = content, modifier = modifier) { measurables, constraints ->
         val gap = spacing.roundToPx()
         val loose = constraints.copy(minWidth = 0, minHeight = 0)
@@ -387,26 +387,34 @@ fun Wrap(modifier: Modifier = Modifier, spacing: Dp = 6.dp, content: @Composable
         val maxW = if (constraints.hasBoundedWidth) constraints.maxWidth else Int.MAX_VALUE
         val xs = IntArray(placeables.size)
         val ys = IntArray(placeables.size)
+        val line = IntArray(placeables.size)
+        val lineWidths = ArrayList<Int>()
         var x = 0
         var y = 0
         var rowH = 0
         var widest = 0
         placeables.forEachIndexed { i, p ->
             if (x > 0 && x + p.width > maxW) {
+                lineWidths.add(x - gap)
                 x = 0
                 y += rowH + gap
                 rowH = 0
             }
             xs[i] = x
             ys[i] = y
+            line[i] = lineWidths.size
             x += p.width + gap
             if (p.height > rowH) rowH = p.height
             if (x - gap > widest) widest = x - gap
         }
+        if (placeables.isNotEmpty()) lineWidths.add(x - gap)
         val width = if (constraints.hasBoundedWidth) constraints.maxWidth else widest
         val height = (if (placeables.isEmpty()) 0 else y + rowH).coerceIn(constraints.minHeight, constraints.maxHeight)
         layout(width, height) {
-            placeables.forEachIndexed { i, p -> p.placeRelative(xs[i], ys[i]) }
+            placeables.forEachIndexed { i, p ->
+                val shift = if (center) ((width - lineWidths[line[i]]) / 2).coerceAtLeast(0) else 0
+                p.placeRelative(xs[i] + shift, ys[i])
+            }
         }
     }
 }

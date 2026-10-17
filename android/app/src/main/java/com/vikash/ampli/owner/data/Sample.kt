@@ -114,10 +114,6 @@ internal object Sample {
                     row("Wi-Fi transfer", 9.0, 9.0),
                 ),
             ),
-            Widget(
-                "money", "Money split", "split",
-                listOf(row("Pro sales", 12178800.0, 66.0), row("AdMob", 6251200.0, 34.0)),
-            ),
         )
         "carhub" -> listOf(
             Widget("voice", "Voice the drivers picked", "split", listOf(row("Bunty (male)", 58.0, 58.0), row("Simran (female)", 42.0, 42.0))),
@@ -138,7 +134,6 @@ internal object Sample {
                 "states", "Users by state", "bars",
                 listOf(row("Haryana", 34.0, 34.0), row("Uttar Pradesh", 29.0, 29.0), row("Rajasthan", 21.0, 21.0), row("Delhi", 11.0, 11.0), row("Other", 5.0, 5.0)),
             ),
-            Widget("money", "Money split", "split", listOf(row("AdMob", 2875000.0, 70.0), row("Coaching leads", 1250000.0, 30.0))),
         )
         else -> {
             val tot = all.biz.toDouble()
@@ -177,8 +172,39 @@ internal object Sample {
             products = if (product == "all") apps.map { a ->
                 ProductSummary(a.id, Products.name(a.id), a.biz * 100, a.downloads, a.rating, a.change)
             } else emptyList(),
+            vitals = when (product) {
+                "mp3" -> Vitals(yesterday(), 0.0098, 0.0021)
+                "carhub" -> Vitals(yesterday(), 0.0036, 0.0012)
+                "naukri" -> Vitals(yesterday(), 0.0019, 0.0006)
+                else -> null
+            },
         )
     }
+
+    private fun yesterday(): String = java.time.LocalDate.now().minusDays(1).toString()
+
+    // ---------------- alerts ----------------
+
+    fun alerts(): List<Alert> = listOf(
+        Alert(
+            "vitals-crash-mp3", "high", "mp3", "Crash rate 0.98% (Play limit 1.09%)",
+            "Close to Play's bad-behaviour limit. Above it, Play shows the app less. Check the latest crashes.", "open_settings",
+        ),
+        Alert(
+            "reviews-low-naukri", "medium", "naukri", "2 unreplied 1★ reviews",
+            "A quick, kind reply often turns a 1★ into a 4★.", "open_reviews",
+        ),
+        Alert(
+            "campaign-stop-4", "medium", "carhub", "Car Hub · Instagram says Stop",
+            "Only ₹0.65 back per ₹1 after 6 days. Pause it and move the budget to a winner.", "open_ads",
+        ),
+    )
+
+    fun campaignLog(id: Long): List<CampaignLogEntry> = listOf(
+        CampaignLogEntry(3, id, "sync", "sync", "Spend, clicks and installs updated", ago(1)),
+        CampaignLogEntry(2, id, "owner", "budget", "Daily budget set", ago(30)),
+        CampaignLogEntry(1, id, "owner", "create", "Created and sent for review", ago(24L * 6)),
+    )
 
     // ---------------- ads ----------------
 
@@ -186,12 +212,14 @@ internal object Sample {
         AdsPlatform(
             "meta", "Meta", "Facebook + Instagram", true,
             listOf(AdAccount(1, "meta", "act_1001", "Ampli Studio", "INR", "connected", Instant.now().toString(), "")),
+            10000,
         ),
         AdsPlatform(
             "tiktok", "TikTok", "TikTok Ads", true,
             listOf(AdAccount(2, "tiktok", "7001", "Ampli Studio", "INR", "connected", Instant.now().toString(), "")),
+            170000,
         ),
-        AdsPlatform("google", "Google Ads", "YouTube + Play + Search", true, emptyList()),
+        AdsPlatform("google", "Google Ads", "YouTube + Play + Search", true, emptyList(), 100000),
     )
 
     private fun f2(d: Double) = String.format(Locale.US, "%.2f", d)
@@ -220,6 +248,8 @@ internal object Sample {
             days = days, verdict = verdict("live", days, roas),
             adAccountId = when (platform) { "meta" -> 1L; "tiktok" -> 2L; else -> null },
             utmCampaign = "ampli-c$id",
+            autoStop = AutoStop(enabled = id == 1L),
+            attribution = if (platform == "google") "estimate" else "link",
         )
     }
 
@@ -227,7 +257,7 @@ internal object Sample {
         camp(1, "mp3", "meta", "MP3 · Reels · Pay once, play forever", "IN", 18000, 3420, 41200, 12),
         camp(2, "mp3", "tiktok", "MP3 · TikTok · Record player", "US", 24500, 610, 9800, 9),
         camp(3, "carhub", "google", "Car Hub · YouTube · Haryanvi voice", "IN", 12000, 1480, 33900, 14),
-        camp(4, "carhub", "meta", "Car Hub · Instagram · Hey Ampli", "IN", 8000, 520, 7480, 6),
+        camp(4, "carhub", "meta", "Car Hub · Instagram · Hey Ampli", "IN", 8000, 520, 5200, 6),
         camp(5, "naukri", "google", "Naukri · App campaign · Sarkari jobs", "IN", 15000, 9400, 21300, 10),
         camp(6, "naukri", "meta", "Naukri · Facebook · Haryana police", "IN", 6000, 1900, 2100, 4),
     )

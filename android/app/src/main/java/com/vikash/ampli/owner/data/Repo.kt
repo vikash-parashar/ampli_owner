@@ -1,6 +1,9 @@
 package com.vikash.ampli.owner.data
 
 import android.content.Context
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -14,12 +17,18 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.File
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.KeyStore
 import java.time.Instant
 import java.time.LocalDate
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 
-val json = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = true }
+val json = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = true; coerceInputValues = true }
 
 /** Everything the screens need. [LocalRepo] works offline on this phone; [RemoteRepo] talks to the Go server. */
 interface Repo {
@@ -41,12 +50,12 @@ interface Repo {
     suspend fun setFeatureState(id: Long, state: String)
     suspend fun stats(from: String, to: String): List<DayStat>
     suspend fun putStat(d: DayStat)
-    suspend fun campaigns(): List<Campaign>
-    suspend fun saveCampaign(c: Campaign)
     suspend fun guides(): List<Guide>
 
     // API v2 (docs/api-v2.md). Product is "all", "mp3", "carhub" or "naukri".
     suspend fun dashboard(product: String): Dashboard
+    /** "Needs your attention" items, most severe first. */
+    suspend fun alerts(): List<Alert>
     suspend fun adPlatforms(): List<AdsPlatform>
     /** Starts the OAuth sign-in for an ad platform and returns the URL to open in the browser. */
     suspend fun connectAds(platform: String): String
@@ -56,10 +65,26 @@ interface Repo {
     suspend fun pauseCampaign(id: Long): AdCampaign
     suspend fun resumeCampaign(id: Long): AdCampaign
     suspend fun setBudget(id: Long, dailyBudgetPaise: Long): AdCampaign
-    /** Pulls spend, clicks and installs from every connected ad account; returns how many synced. */
-    suspend fun syncAds(): Int
+    suspend fun setAutoStop(id: Long, rule: AutoStop): AdCampaign
+    suspend fun deleteCampaign(id: Long)
+    suspend fun campaignLog(id: Long): List<CampaignLogEntry>
+    /** Pulls spend, clicks and installs from every connected ad account (forced, not cached). */
+    suspend fun syncAds(): SyncResult
     suspend fun reviews(product: String): ReviewsResponse
     suspend fun replyReview(id: Long, text: String)
+    /** Adds a review typed by hand (from email, WhatsApp, a call). */
+    suspend fun addReview(product: String, author: String, rating: Int, body: String)
+    suspend fun syncReviews(): SyncResult
+    suspend fun integrations(): Integrations
+    /** Starts the AdMob sign-in and returns the URL to open in the browser. */
+    suspend fun connectAdmob(): String
+    suspend fun syncIntegrations(): IntegrationsSync
+    /** Forgets the AdMob login on the server. */
+    suspend fun disconnectAdmob()
+    /** Play products and prices the server uses to value verified purchases. */
+    suspend fun skus(): List<Sku>
+    /** Adds a SKU or changes its price. */
+    suspend fun putSku(s: Sku): Sku
 }
 
 // ---------------- local (on-device JSON file, seeded from assets) ----------------
@@ -72,7 +97,6 @@ private data class LocalDb(
     val todos: List<Todo> = emptyList(),
     val features: List<Feature> = emptyList(),
     val stats: List<DayStat> = emptyList(),
-    val campaigns: List<Campaign> = emptyList(),
     val guides: List<Guide> = emptyList(),
     val nextId: Long = 1000,
 )
@@ -86,14 +110,27 @@ class LocalRepo(private val context: Context) : Repo {
     private fun <T> asset(name: String, s: KSerializer<T>): T =
         json.decodeFromString(s, context.assets.open(name).bufferedReader().use { it.readText() })
 
+    private fun seed() = LocalDb(
+        checklist = asset("checklist.json", ListSerializer(ChecklistItem.serializer())),
+        features = asset("features.json", ListSerializer(Feature.serializer())),
+        guides = asset("guides.json", ListSerializer(Guide.serializer())),
+    )
+
     private fun load(): LocalDb {
         cache?.let { return it }
-        val db = if (file.exists()) json.decodeFromString(LocalDb.serializer(), file.readText())
-        else LocalDb(
-            checklist = asset("checklist.json", ListSerializer(ChecklistItem.serializer())),
-            features = asset("features.json", ListSerializer(Feature.serializer())),
-            guides = asset("guides.json", ListSerializer(Guide.serializer())),
-        )
+        val db = if (file.exists()) {
+            try {
+                json.decodeFromString(LocalDb.serializer(), file.readText())
+            } catch (e: Exception) {
+                // A half-written or corrupt file must not lock the app: keep a copy for later, start fresh.
+                val bad = File(context.filesDir, "owner-db.bad.json")
+                bad.delete()
+                if (!file.renameTo(bad)) file.delete()
+                seed()
+            }
+        } else {
+            seed()
+        }
         cache = db
         return db
     }
@@ -105,7 +142,11 @@ class LocalRepo(private val context: Context) : Repo {
             val next = f(load())
             val tmp = File(file.path + ".tmp")
             tmp.writeText(json.encodeToString(LocalDb.serializer(), next))
-            tmp.renameTo(file)
+            if (!tmp.renameTo(file)) {
+                // Some file systems refuse to rename over an existing file.
+                file.delete()
+                if (!tmp.renameTo(file)) throw IOException("Couldn't save on this phone")
+            }
             cache = next
         }
     }
@@ -205,13 +246,6 @@ class LocalRepo(private val context: Context) : Repo {
         db.copy(stats = db.stats.filterNot { it.product == d.product && it.day == d.day } + d)
     }
 
-    override suspend fun campaigns() = read { it.campaigns.sortedByDescending { c -> c.id } }
-
-    override suspend fun saveCampaign(c: Campaign) = write { db ->
-        if (c.id == 0L) db.copy(campaigns = db.campaigns + c.copy(id = db.nextId), nextId = db.nextId + 1)
-        else db.copy(campaigns = db.campaigns.map { if (it.id == c.id) c else it })
-    }
-
     override suspend fun guides() = read { it.guides }
 
     // ---- API v2 in phone-only mode: deterministic sample data, changes kept in memory only ----
@@ -224,6 +258,8 @@ class LocalRepo(private val context: Context) : Repo {
     private suspend fun <T> inMemory(f: () -> T): T = mem.withLock { f() }
 
     override suspend fun dashboard(product: String): Dashboard = inMemory { Sample.dashboard(product, sampleCampaigns) }
+
+    override suspend fun alerts(): List<Alert> = Sample.alerts()
 
     override suspend fun adPlatforms(): List<AdsPlatform> = inMemory { samplePlatforms }
 
@@ -273,7 +309,16 @@ class LocalRepo(private val context: Context) : Repo {
     override suspend fun setBudget(id: Long, dailyBudgetPaise: Long): AdCampaign =
         inMemory { changeCampaign(id) { it.copy(dailyBudgetPaise = dailyBudgetPaise) } }
 
-    override suspend fun syncAds(): Int = 0
+    override suspend fun setAutoStop(id: Long, rule: AutoStop): AdCampaign =
+        inMemory { changeCampaign(id) { it.copy(autoStop = rule) } }
+
+    override suspend fun deleteCampaign(id: Long) = inMemory {
+        sampleCampaigns = sampleCampaigns.filter { it.id != id }
+    }
+
+    override suspend fun campaignLog(id: Long): List<CampaignLogEntry> = Sample.campaignLog(id)
+
+    override suspend fun syncAds(): SyncResult = SyncResult(0, emptyList())
 
     override suspend fun reviews(product: String): ReviewsResponse = inMemory {
         ReviewsResponse(
@@ -286,6 +331,28 @@ class LocalRepo(private val context: Context) : Repo {
     override suspend fun replyReview(id: Long, text: String) = inMemory {
         sampleReviews = sampleReviews.map { if (it.id == id) it.copy(reply = text) else it }
     }
+
+    override suspend fun addReview(product: String, author: String, rating: Int, body: String) = inMemory {
+        val id = (sampleReviews.maxOfOrNull { it.id } ?: 0L) + 1L
+        val sentiment = if (rating >= 4) "positive" else if (rating == 3) "mixed" else "negative"
+        sampleReviews = listOf(Review(id, product, author, rating, body, sentiment, "", "manual", now())) + sampleReviews
+    }
+
+    override suspend fun syncReviews(): SyncResult =
+        throw IllegalStateException("Connect a server in Settings to sync reviews from Play")
+
+    override suspend fun integrations(): Integrations = Integrations()
+
+    override suspend fun connectAdmob(): String = throw IllegalStateException("Connect a server in Settings first")
+
+    override suspend fun syncIntegrations(): IntegrationsSync =
+        throw IllegalStateException("Connect a server in Settings first")
+
+    override suspend fun disconnectAdmob(): Unit = throw IllegalStateException("Connect a server in Settings first")
+
+    override suspend fun skus(): List<Sku> = emptyList()
+
+    override suspend fun putSku(s: Sku): Sku = throw IllegalStateException("Connect a server in Settings first")
 }
 
 // ---------------- remote (Go server) ----------------
@@ -293,17 +360,35 @@ class LocalRepo(private val context: Context) : Repo {
 class HttpError(val code: Int, message: String) : Exception(message)
 
 class RemoteRepo(baseUrl: String, private val token: String) : Repo {
+    companion object {
+        /** Checks the address and token before they are saved: /healthz, then an owner call with the token. */
+        suspend fun testConnection(baseUrl: String, token: String) {
+            val r = RemoteRepo(baseUrl, token)
+            try {
+                r.call("GET", "/healthz", auth = false)
+            } catch (e: HttpError) {
+                throw IOException("The server answered ${e.code}. Check the address.")
+            }
+            try {
+                r.overview()
+            } catch (e: HttpError) {
+                if (e.code == 401 || e.code == 403) throw IOException("The server is up but refused the token")
+                throw e
+            }
+        }
+    }
+
     override val isRemote = true
     private val base = baseUrl.trimEnd('/')
 
-    private suspend fun call(method: String, path: String, body: String? = null): String = withContext(Dispatchers.IO) {
+    private suspend fun call(method: String, path: String, body: String? = null, auth: Boolean = true): String = withContext(Dispatchers.IO) {
         val conn = URL(base + path).openConnection() as HttpURLConnection
         try {
             conn.requestMethod = if (method == "PATCH") "POST" else method
             if (method == "PATCH") conn.setRequestProperty("X-HTTP-Method-Override", "PATCH")
             conn.connectTimeout = 10_000
             conn.readTimeout = 20_000
-            conn.setRequestProperty("Authorization", "Bearer $token")
+            if (auth) conn.setRequestProperty("Authorization", "Bearer $token")
             conn.setRequestProperty("Accept", "application/json")
             if (body != null) {
                 conn.doOutput = true
@@ -329,8 +414,14 @@ class RemoteRepo(baseUrl: String, private val token: String) : Repo {
     override suspend fun tickets(kind: String?) =
         get("/v1/tickets" + (kind?.let { "?kind=$it" } ?: ""), ListSerializer(Ticket.serializer()))
     override suspend fun ticket(id: Long) = get("/v1/tickets/$id", TicketDetail.serializer())
-    override suspend fun createTicket(t: Ticket) =
-        json.decodeFromString(Ticket.serializer(), call("POST", "/v1/tickets", json.encodeToString(Ticket.serializer(), t)))
+    override suspend fun createTicket(t: Ticket): Ticket {
+        // Only the fields a hand-made ticket has; the server rejects empty timestamps and unknown fields.
+        val body = buildJsonObject {
+            put("product", t.product); put("kind", t.kind); put("source", t.source)
+            put("title", t.title); put("body", t.body); put("reporter_name", t.reporterName)
+        }.toString()
+        return json.decodeFromString(Ticket.serializer(), call("POST", "/v1/tickets", body))
+    }
 
     override suspend fun setTicketStatus(id: Long, status: String) {
         call("PATCH", "/v1/tickets/$id", buildJsonObject { put("status", status) }.toString())
@@ -376,12 +467,6 @@ class RemoteRepo(baseUrl: String, private val token: String) : Repo {
         call("PUT", "/v1/stats", json.encodeToString(ListSerializer(DayStat.serializer()), listOf(d)))
     }
 
-    override suspend fun campaigns() = get("/v1/campaigns", ListSerializer(Campaign.serializer()))
-    override suspend fun saveCampaign(c: Campaign) {
-        val body = json.encodeToString(Campaign.serializer(), c)
-        if (c.id == 0L) call("POST", "/v1/campaigns", body) else call("PUT", "/v1/campaigns/${c.id}", body)
-    }
-
     override suspend fun guides() = get("/v1/guides", ListSerializer(Guide.serializer()))
 
     // ---- API v2 ----
@@ -391,14 +476,18 @@ class RemoteRepo(baseUrl: String, private val token: String) : Repo {
 
     override suspend fun dashboard(product: String): Dashboard = get("/v1/dashboard?product=$product", Dashboard.serializer())
 
-    override suspend fun adPlatforms(): List<AdsPlatform> = get("/v1/ads/platforms", ListSerializer(AdsPlatform.serializer()))
+    override suspend fun alerts(): List<Alert> = get("/v1/alerts", ListSerializer(Alert.serializer()))
 
-    override suspend fun connectAds(platform: String): String {
-        val o = json.decodeFromString(JsonObject.serializer(), call("POST", "/v1/ads/connect/$platform", "{}"))
+    private fun authUrl(text: String): String {
+        val o = json.decodeFromString(JsonObject.serializer(), text)
         val url = (o["auth_url"] as? JsonPrimitive)?.content ?: ""
         if (url.isBlank() || url == "null") throw IllegalStateException("The server did not send a sign-in link")
         return url
     }
+
+    override suspend fun adPlatforms(): List<AdsPlatform> = get("/v1/ads/platforms", ListSerializer(AdsPlatform.serializer()))
+
+    override suspend fun connectAds(platform: String): String = authUrl(call("POST", "/v1/ads/connect/$platform", "{}"))
 
     override suspend fun deleteAdAccount(id: Long) {
         call("DELETE", "/v1/ads/accounts/$id")
@@ -417,25 +506,130 @@ class RemoteRepo(baseUrl: String, private val token: String) : Repo {
     override suspend fun setBudget(id: Long, dailyBudgetPaise: Long): AdCampaign =
         postCampaign("/v1/ads/campaigns/$id/budget", buildJsonObject { put("daily_budget_paise", dailyBudgetPaise) }.toString())
 
-    override suspend fun syncAds(): Int {
-        val o = json.decodeFromString(JsonObject.serializer(), call("POST", "/v1/ads/sync", "{}"))
-        return (o["synced"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 0
+    override suspend fun setAutoStop(id: Long, rule: AutoStop): AdCampaign =
+        postCampaign("/v1/ads/campaigns/$id/autostop", json.encodeToString(AutoStop.serializer(), rule))
+
+    override suspend fun deleteCampaign(id: Long) {
+        call("DELETE", "/v1/ads/campaigns/$id")
     }
+
+    override suspend fun campaignLog(id: Long): List<CampaignLogEntry> =
+        get("/v1/ads/campaigns/$id/log", ListSerializer(CampaignLogEntry.serializer()))
+
+    override suspend fun syncAds(): SyncResult =
+        json.decodeFromString(SyncResult.serializer(), call("POST", "/v1/ads/sync?force=1", "{}"))
 
     override suspend fun reviews(product: String): ReviewsResponse = get("/v1/reviews?product=$product", ReviewsResponse.serializer())
 
     override suspend fun replyReview(id: Long, text: String) {
         call("POST", "/v1/reviews/$id/reply", buildJsonObject { put("text", text) }.toString())
     }
+
+    override suspend fun addReview(product: String, author: String, rating: Int, body: String) {
+        call("POST", "/v1/reviews", buildJsonObject {
+            put("product", product); put("author", author); put("rating", rating); put("body", body)
+        }.toString())
+    }
+
+    override suspend fun syncReviews(): SyncResult =
+        json.decodeFromString(SyncResult.serializer(), call("POST", "/v1/reviews/sync", "{}"))
+
+    override suspend fun integrations(): Integrations = get("/v1/integrations", Integrations.serializer())
+
+    override suspend fun connectAdmob(): String = authUrl(call("POST", "/v1/integrations/admob/connect", "{}"))
+
+    override suspend fun syncIntegrations(): IntegrationsSync =
+        json.decodeFromString(IntegrationsSync.serializer(), call("POST", "/v1/integrations/sync", "{}"))
+
+    override suspend fun disconnectAdmob() {
+        call("DELETE", "/v1/integrations/admob")
+    }
+
+    override suspend fun skus(): List<Sku> = get("/v1/skus", ListSerializer(Sku.serializer()))
+
+    override suspend fun putSku(s: Sku): Sku =
+        json.decodeFromString(Sku.serializer(), call("PUT", "/v1/skus", json.encodeToString(Sku.serializer(), s)))
 }
 
-/** Server address and owner token, kept in private app prefs on this phone. */
+/**
+ * Encrypts small secrets with an AES-256-GCM key that lives in the Android Keystore,
+ * so the key never leaves the phone's secure hardware and a copied prefs file is useless.
+ */
+private object TokenVault {
+    private const val ALIAS = "ampli_owner_token_key"
+    private const val TRANSFORM = "AES/GCM/NoPadding"
+
+    private fun key(): SecretKey {
+        val ks = KeyStore.getInstance("AndroidKeyStore")
+        ks.load(null)
+        val existing = ks.getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry
+        if (existing != null) return existing.secretKey
+        val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        gen.init(
+            KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .build(),
+        )
+        return gen.generateKey()
+    }
+
+    /** "iv:ciphertext", both Base64. */
+    fun encrypt(plain: String): String {
+        val cipher = Cipher.getInstance(TRANSFORM)
+        cipher.init(Cipher.ENCRYPT_MODE, key())
+        val ct = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
+        return Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(ct, Base64.NO_WRAP)
+    }
+
+    fun decrypt(stored: String): String {
+        val parts = stored.split(":")
+        if (parts.size != 2) return ""
+        val iv = Base64.decode(parts[0], Base64.NO_WRAP)
+        val ct = Base64.decode(parts[1], Base64.NO_WRAP)
+        val cipher = Cipher.getInstance(TRANSFORM)
+        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
+        return String(cipher.doFinal(ct), Charsets.UTF_8)
+    }
+}
+
+/** Server address, owner token (encrypted with a Keystore key) and the lock switch, in private app prefs. */
 class Settings(context: Context) {
     private val prefs = context.getSharedPreferences("owner", Context.MODE_PRIVATE)
+
+    init {
+        // Older builds kept the token in plain text: encrypt it once and delete the plain copy.
+        val plain = prefs.getString("token", null)
+        if (plain != null) {
+            val ok = plain.isBlank() || runCatching {
+                prefs.edit().putString("token_enc", TokenVault.encrypt(plain.trim())).commit()
+            }.getOrDefault(false)
+            if (ok) prefs.edit().remove("token").commit()
+        }
+    }
+
     var serverUrl: String
         get() = prefs.getString("server_url", "") ?: ""
         set(v) = prefs.edit().putString("server_url", v.trim()).apply()
+
     var token: String
-        get() = prefs.getString("token", "") ?: ""
-        set(v) = prefs.edit().putString("token", v.trim()).apply()
+        get() {
+            prefs.getString("token", null)?.let { return it } // migration failed: keep working
+            val enc = prefs.getString("token_enc", null) ?: return ""
+            return runCatching { TokenVault.decrypt(enc) }.getOrDefault("")
+        }
+        set(v) {
+            val t = v.trim()
+            if (t.isEmpty()) {
+                prefs.edit().remove("token_enc").remove("token").apply()
+            } else {
+                prefs.edit().putString("token_enc", TokenVault.encrypt(t)).remove("token").apply()
+            }
+        }
+
+    /** Ask for fingerprint, face or the screen lock before showing server data. On by default. */
+    var lock: Boolean
+        get() = prefs.getBoolean("lock", true)
+        set(v) = prefs.edit().putBoolean("lock", v).apply()
 }
