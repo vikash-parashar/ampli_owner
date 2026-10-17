@@ -117,11 +117,15 @@ func (s *Server) publicPurchase(w http.ResponseWriter, r *http.Request) {
 		Product       string `json:"product"`
 		InstallID     string `json:"install_id"`
 		SKU           string `json:"sku"`
+		ProductID     string `json:"product_id"` // Play's name for the sku; accepted as an alias
 		PurchaseToken string `json:"purchase_token"`
 		Kind          string `json:"kind"`
 	}
 	if !decode(w, r, &in) {
 		return
+	}
+	if in.SKU == "" {
+		in.SKU = in.ProductID
 	}
 	if productID(in.Product) == "" || !lenBetween(in.SKU, 1, 100) || !lenBetween(in.PurchaseToken, 10, 4000) {
 		writeErr(w, http.StatusBadRequest, "product, install_id, sku and purchase_token are required")

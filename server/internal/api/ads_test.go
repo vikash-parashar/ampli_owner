@@ -171,7 +171,12 @@ func TestAdsManagerFlow(t *testing.T) {
 	if code := call(t, srv, "POST", "/v1/public/purchases", false, forged, nil); code != 200 {
 		t.Fatalf("tester purchase: %d", code)
 	}
-	forged["sku"] = "made_up"
+	delete(forged, "sku")
+	forged["product_id"], forged["purchase_token"] = "ampli_tip_49", "test-token-2" // Play's field name works too
+	if code := call(t, srv, "POST", "/v1/public/purchases", false, forged, nil); code != 200 {
+		t.Fatalf("product_id alias: %d", code)
+	}
+	forged["product_id"] = "made_up"
 	if code := call(t, srv, "POST", "/v1/public/purchases", false, forged, nil); code != 400 {
 		t.Fatalf("unknown sku: %d", code)
 	}
