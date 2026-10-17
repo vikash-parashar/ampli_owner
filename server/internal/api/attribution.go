@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -167,6 +168,12 @@ func (s *Server) publicPurchase(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, v.status, v.msg)
 		return
 	}
+	if v.keep {
+		p.VerifyError = v.reason
+		if s.Box != nil {
+			p.TokenEnc = s.Box.Seal(in.PurchaseToken) // so the daily sync can re-check it after a fix
+		}
+	}
 	created, err := s.Store.SavePurchase(ctx, p)
 	if err != nil {
 		fail(w, r, err)
@@ -188,12 +195,14 @@ type purchaseCheck struct {
 	status int
 	msg    string
 	keep   bool
+	reason string // for the owner's alert, when kept
 }
 
 func (s *Server) verifyPurchase(ctx context.Context, product, sku, token string, p *store.Purchase) purchaseCheck {
 	p.OrderID = "unverified:" + p.TokenHash
 	if s.Play == nil {
-		return purchaseCheck{http.StatusServiceUnavailable, "purchase saved; it is checked once Google Play is connected, retry later", true}
+		return purchaseCheck{http.StatusServiceUnavailable, "purchase saved; it is checked once Google Play is connected, retry later", true,
+			"Google Play is not connected on the server"}
 	}
 	pkg, err := s.packageOf(ctx, product)
 	if err != nil {
@@ -210,11 +219,15 @@ func (s *Server) verifyPurchase(ctx context.Context, product, sku, token string,
 		// 401/403 = our service account lacks "View financial data"; 404 = wrong package or sku on our side.
 		// Our setup is wrong, not the purchase: keep it unverified and let the app retry (an alert says so).
 		slog.Error("purchase check blocked by our Play setup", "product", product, "sku", sku, "status", he.Status, "err", err)
-		return purchaseCheck{http.StatusServiceUnavailable, "purchase saved; the server can't check it with Google Play yet, retry later", true}
+		why := fmt.Sprintf("Google Play refused the service account (HTTP %d): give it \"View financial data\"", he.Status)
+		if he.Status == http.StatusNotFound {
+			why = fmt.Sprintf("Google Play doesn't know %s in %s (HTTP 404): create the product in Play Console or fix the package name", sku, pkg)
+		}
+		return purchaseCheck{http.StatusServiceUnavailable, "purchase saved; the server can't check it with Google Play yet, retry later", true, why}
 	}
 	if err != nil {
 		slog.Warn("purchase check failed, will retry", "product", product, "sku", sku, "err", err)
-		return purchaseCheck{http.StatusServiceUnavailable, "Google Play is not answering; retry later", true}
+		return purchaseCheck{http.StatusServiceUnavailable, "Google Play is not answering; retry later", true, "Google Play was not answering"}
 	}
 	switch gp.State {
 	case 0:

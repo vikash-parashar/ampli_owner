@@ -17,3 +17,22 @@ func TestParseUTF16CSV(t *testing.T) {
 		t.Fatalf("rows = %v, %v", rows, err)
 	}
 }
+
+func TestEarningsNet(t *testing.T) {
+	// Indian buyer, no Tax row: GST (18%) comes out of the gross, as the developer pays it.
+	in := EarningOrder{Gross: 199, Fee: -25.31, Country: "IN", HasCharge: true}
+	if got := in.NetPaise(); got != 14333 {
+		t.Fatalf("IN net = %d, want 14333", got)
+	}
+	// Google withheld the tax itself: rows add up as they are.
+	us := EarningOrder{Gross: 250, Fee: -37.5, Tax: -20, Country: "US", HasCharge: true, HasTax: true}
+	if got := us.NetPaise(); got != 19250 {
+		t.Fatalf("US net = %d", got)
+	}
+	// Charged in one month, half refunded the next: the merge keeps charge minus refund.
+	m := MergeEarnings(map[string]EarningOrder{"GPA.1": {Gross: 199, Fee: -25.31, Country: "IN", HasCharge: true}},
+		map[string]EarningOrder{"GPA.1": {Gross: -99.5, Fee: 12.66, Country: "IN"}})
+	if e := m["GPA.1"]; !e.HasCharge || e.NetPaise() != 7167 {
+		t.Fatalf("merged = %+v net %d", e, e.NetPaise())
+	}
+}

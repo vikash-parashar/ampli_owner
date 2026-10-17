@@ -1,9 +1,12 @@
 package api_test
 
 import (
+	"encoding/base64"
+
 	"archive/zip"
 	"bytes"
 	"context"
+	"github.com/vikash-parashar/ampli_owner/server/internal/secret"
 	"testing"
 	"time"
 
@@ -46,25 +49,33 @@ func TestEarningsReportSetsExactNet(t *testing.T) {
 	f.Write([]byte("Description,Transaction Type,Product id,Sku Id,Buyer Country,Merchant Currency,Amount (Merchant Currency)\n" +
 		"GPA.good-usa-token-1,Charge,com.vikash.ampli,ampli_pro,US,INR,250.00\n" +
 		"GPA.good-usa-token-1,Google fee,com.vikash.ampli,ampli_pro,US,INR,-37.50\n" +
+		"GPA.good-india-token-1,Charge,com.vikash.ampli,ampli_pro,IN,INR,199.00\n" +
+		"GPA.good-india-token-1,Google fee,com.vikash.ampli,ampli_pro,IN,INR,-25.31\n" +
 		"GPA.other,Charge,com.vikash.ampli,ampli_pro,IN,INR,199.00\n"))
 	zw.Close()
 	playObjects["earnings/earnings_"+month.Format("200601")+"_1234-1.zip"] = zb.Bytes()
+	// The month before holds nothing for these orders; a refund-only order there must not be priced.
+	prev := month.AddDate(0, -1, 0)
+	playObjects["earnings/earnings_"+prev.Format("200601")+"_1234-1.csv"] = []byte("Description,Transaction Type,Buyer Country,Merchant Currency,Amount (Merchant Currency)\n" +
+		"GPA.refund-only,Charge refund,IN,INR,-199.00\n")
 	t.Cleanup(func() { clear(playObjects) })
 
 	srv, _ := newServerWith(t, func(s *api.Server) { s.Play = fakePlay(t); s.PlayBucket = "pubsite_prod_rev_1" })
 	call(t, srv, "POST", "/v1/public/purchases", false, map[string]any{"product": "mp3", "install_id": "44444444-4444-4444-8444-444444444444",
 		"kind": "pro", "sku": "ampli_pro", "purchase_token": "good-usa-token-1"}, nil)
+	call(t, srv, "POST", "/v1/public/purchases", false, map[string]any{"product": "mp3", "install_id": "66666666-6666-4666-8666-666666666666",
+		"kind": "pro", "sku": "ampli_pro", "purchase_token": "good-india-token-1"}, nil)
 	var res api.SyncResult
 	call(t, srv, "POST", "/v1/integrations/sync", true, nil, &res)
-	if res.ExactNet != 1 {
+	if res.ExactNet != 2 {
 		t.Fatalf("sync = %+v", res)
 	}
 	var d struct {
 		Revenue30d []int64 `json:"revenue_30d"`
 	}
 	call(t, srv, "GET", "/v1/dashboard?product=mp3", true, nil, &d)
-	if d.Revenue30d[len(d.Revenue30d)-1] != 21250 {
-		t.Fatalf("revenue today = %v, want 21250 paise from the earnings report", d.Revenue30d[len(d.Revenue30d)-1])
+	if d.Revenue30d[len(d.Revenue30d)-1] != 21250+14333 {
+		t.Fatalf("revenue today = %v, want 35583 paise from the earnings report (IN without GST)", d.Revenue30d[len(d.Revenue30d)-1])
 	}
 	call(t, srv, "POST", "/v1/integrations/sync", true, nil, &res)
 	if res.ExactNet != 0 {
@@ -103,5 +114,35 @@ func TestVerdictUsesLastSevenDays(t *testing.T) {
 	c := res.Campaigns[0]
 	if c.ROAS != 2 || c.ROAS7 != 0 || c.JudgedOn != "last_7_days" || c.Verdict.Code != "stop" {
 		t.Fatalf("campaign = %+v", c)
+	}
+}
+
+// A purchase Google couldn't confirm is re-checked by the daily sync, without waiting for the app to retry.
+func TestSyncRechecksUnconfirmedPurchases(t *testing.T) {
+	box, _ := secret.New(base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")))
+	srv, st := newServerWith(t, func(s *api.Server) { s.Play = fakePlay(t); s.Box = box })
+	playDown.Store(true)
+	t.Cleanup(func() { playDown.Store(false) })
+	p := map[string]any{"product": "mp3", "install_id": "77777777-7777-4777-8777-777777777777", "kind": "pro",
+		"sku": "ampli_pro", "purchase_token": "flaky-recheck-token-1"}
+	if code := call(t, srv, "POST", "/v1/public/purchases", false, p, nil); code != 503 {
+		t.Fatalf("google down: %d", code)
+	}
+	var sealed int
+	st.DB.QueryRow(context.Background(), `SELECT count(*) FROM purchases WHERE token_enc IS NOT NULL AND verify_error <> ''`).Scan(&sealed)
+	if sealed != 1 {
+		t.Fatalf("unconfirmed purchase kept no sealed token (%d)", sealed)
+	}
+	playDown.Store(false)
+	var res api.SyncResult
+	call(t, srv, "POST", "/v1/integrations/sync", true, nil, &res)
+	if res.Rechecked != 1 {
+		t.Fatalf("sync = %+v", res)
+	}
+	var verified bool
+	var left []byte
+	st.DB.QueryRow(context.Background(), `SELECT verified, token_enc FROM purchases`).Scan(&verified, &left)
+	if !verified || left != nil {
+		t.Fatalf("after recheck verified=%v token kept=%v", verified, left != nil)
 	}
 }

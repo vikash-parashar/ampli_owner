@@ -5,6 +5,7 @@ import (
 	"github.com/vikash-parashar/ampli_owner/server/internal/store"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -142,12 +143,19 @@ func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, err)
 		return
 	}
-	if unchecked > 0 {
+	if unchecked.Count > 0 {
+		why := "In Play Console > Users and permissions, give the service account \"View financial data\", and check each app's package name."
+		if len(unchecked.Reasons) > 0 {
+			why = strings.Join(unchecked.Reasons[:min(3, len(unchecked.Reasons))], ". ") + "."
+		}
 		a := Alert{ID: "purchases-unchecked", Severity: "high", Action: "open_settings",
-			Title:  fmt.Sprintf("Google Play hasn't confirmed %d purchase%s", unchecked, plural(unchecked)),
-			Detail: "They are saved but not counted as money yet. In Play Console > Users and permissions, give the service account \"View financial data\", and check each app's package name. The apps retry on their own."}
+			Title: fmt.Sprintf("Google Play hasn't confirmed %d purchase%s", unchecked.Count, plural(unchecked.Count)),
+			Detail: why + " They are saved but not counted as money yet. Once fixed, the daily sync re-checks them and the apps retry, " +
+				"for up to 30 days after each purchase."}
 		if s.Play == nil {
-			a.Severity, a.Detail = "medium", "Connect Google Play on the server (PLAY_SERVICE_ACCOUNT_JSON) so they can be checked and counted. The apps retry on their own."
+			a.Severity = "medium"
+			a.Detail = "Connect Google Play on the server (PLAY_SERVICE_ACCOUNT_JSON) so they can be checked and counted. " +
+				"The daily sync and the apps retry for up to 30 days after each purchase."
 		}
 		add(a)
 	}

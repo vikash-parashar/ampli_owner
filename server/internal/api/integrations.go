@@ -101,6 +101,7 @@ type SyncResult struct {
 	PlayDays  int      `json:"play_days"`
 	Refunds   int      `json:"refunds"`
 	ExactNet  int64    `json:"exact_net"` // purchases whose net came from Google's earnings report
+	Rechecked int      `json:"rechecked"` // unconfirmed purchases Google answered for in this sync
 	Errors    []string `json:"errors"`
 }
 
@@ -172,8 +173,10 @@ func (s *Server) SyncIntegrations(ctx context.Context) SyncResult {
 		if s.PlayBucket != "" {
 			// Last month's earnings report gives each order's real net, including buyers paying in other currencies.
 			thisMonth := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC)
+			// Both months go into one map first, so a refund booked the month after the charge nets out.
+			var merged map[string]play.EarningOrder
 			for _, month := range []time.Time{thisMonth.AddDate(0, -2, 0), thisMonth.AddDate(0, -1, 0)} {
-				net, err := s.Play.Earnings(ctx, s.PlayBucket, month)
+				m, err := s.Play.Earnings(ctx, s.PlayBucket, month)
 				if errors.Is(err, play.ErrNoObject) {
 					continue
 				}
@@ -181,13 +184,21 @@ func (s *Server) SyncIntegrations(ctx context.Context) SyncResult {
 					add("Play earnings "+month.Format("Jan"), err)
 					continue
 				}
-				n, err := s.Store.SetExactNet(ctx, net)
-				if err != nil {
-					add("earnings", err)
-				}
-				res.ExactNet += n
+				merged = play.MergeEarnings(merged, m)
 			}
+			net := map[string]int64{}
+			for o, e := range merged {
+				if e.HasCharge { // without the original charge the rows can't price the order
+					net[o] = e.NetPaise()
+				}
+			}
+			n, err := s.Store.SetExactNet(ctx, net)
+			if err != nil {
+				add("earnings", err)
+			}
+			res.ExactNet += n
 		}
+		res.Rechecked = s.recheckPurchases(ctx)
 		n, problems := s.SyncReviews(ctx)
 		res.Reviews = n
 		res.Errors = append(res.Errors, problems...)
@@ -243,6 +254,41 @@ func (s *Server) syncAdMob(ctx context.Context, today time.Time) (int, error) {
 		}
 	}
 	return len(earnings), nil
+}
+
+// recheckPurchases asks Google again about purchases it could not confirm when the app sent them (our setup was
+// wrong or Google was down), so a fixed service account confirms them without waiting for the apps to retry.
+func (s *Server) recheckPurchases(ctx context.Context) int {
+	if s.Box == nil {
+		return 0
+	}
+	pend, err := s.Store.PendingPurchases(ctx, s.Now().AddDate(0, 0, -30), 200)
+	if err != nil {
+		slog.Error("pending purchases", "err", err)
+		return 0
+	}
+	done := 0
+	for _, pp := range pend {
+		token, err := s.Box.Open(pp.TokenEnc)
+		if err != nil {
+			continue // TOKEN_KEY changed; the app's own retry still works
+		}
+		p := pp.Purchase
+		v := s.verifyPurchase(ctx, p.ProductID, p.SKU, token, &p)
+		switch {
+		case v.status == 0:
+		case v.keep || v.status == http.StatusConflict:
+			p.VerifyError = firstOf(v.reason, v.msg)
+			_ = s.Store.ResolvePending(ctx, pp.ID, p, false)
+			continue
+		default: // Google refused the token: not money, stop asking
+			p.Region, p.Verified, p.NetPaise = "REFUSED", false, 0
+		}
+		if err := s.Store.ResolvePending(ctx, pp.ID, p, true); err == nil {
+			done++
+		}
+	}
+	return done
 }
 
 // stateOnce marks the callback's OAuth state as used; a second callback with the same state is refused.

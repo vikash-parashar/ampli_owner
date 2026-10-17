@@ -290,10 +290,51 @@ func (c *Client) list(ctx context.Context, bucket, prefix string) ([]string, err
 	return names, nil
 }
 
-// Earnings reads a month's earnings report (written early the next month) and returns, per order id, what
-// reached the merchant account in paise: the charge minus Google's fee and the tax Google kept, at Google's
-// own exchange rate. Orders paid in other countries get their real value here. ErrNoObject = not out yet.
-func (c *Client) Earnings(ctx context.Context, bucket string, month time.Time) (map[string]int64, error) {
+// EarningOrder adds up one order's rows in Google's earnings reports, in INR (Merchant Currency).
+type EarningOrder struct {
+	Gross     float64 // "Charge" and "Charge refund" rows: what the buyer paid, net of refunds
+	Fee       float64 // "Google fee" rows (negative)
+	Tax       float64 // "Tax" rows Google withheld (negative)
+	Other     float64
+	Country   string
+	HasCharge bool // the original charge is in these reports (a refund-only order can't be priced from them)
+	HasTax    bool
+}
+
+// NetPaise is what the order leaves the developer with. For Indian buyers Google does not withhold GST (the
+// developer pays it), so with no Tax row the GST share (18%) is taken out of the gross here.
+// TODO(owner): confirm against one real earnings_YYYYMM file that IN orders have no Tax row.
+func (e EarningOrder) NetPaise() int64 {
+	gross := e.Gross
+	if e.Country == "IN" && !e.HasTax {
+		gross = gross * 100 / 118
+	}
+	return int64(math.Round((gross + e.Fee + e.Tax + e.Other) * 100))
+}
+
+// MergeEarnings adds month b into a, so an order charged in one month and partly refunded in the next adds up.
+func MergeEarnings(a, b map[string]EarningOrder) map[string]EarningOrder {
+	if a == nil {
+		a = map[string]EarningOrder{}
+	}
+	for o, e := range b {
+		m := a[o]
+		m.Gross += e.Gross
+		m.Fee += e.Fee
+		m.Tax += e.Tax
+		m.Other += e.Other
+		m.HasCharge = m.HasCharge || e.HasCharge
+		m.HasTax = m.HasTax || e.HasTax
+		if m.Country == "" {
+			m.Country = e.Country
+		}
+		a[o] = m
+	}
+	return a
+}
+
+// Earnings reads a month's earnings report (written early the next month), per order id. ErrNoObject = not out yet.
+func (c *Client) Earnings(ctx context.Context, bucket string, month time.Time) (map[string]EarningOrder, error) {
 	names, err := c.list(ctx, bucket, "earnings/earnings_"+month.Format("200601"))
 	if err != nil {
 		return nil, err
@@ -301,7 +342,7 @@ func (c *Client) Earnings(ctx context.Context, bucket string, month time.Time) (
 	if len(names) == 0 {
 		return nil, ErrNoObject
 	}
-	net := map[string]float64{}
+	out := map[string]EarningOrder{}
 	for _, n := range names {
 		raw, err := c.object(ctx, bucket, n)
 		if err != nil {
@@ -339,15 +380,30 @@ func (c *Client) Earnings(ctx context.Context, bucket string, month time.Time) (
 					continue
 				}
 				v, err := strconv.ParseFloat(strings.ReplaceAll(r["Amount (Merchant Currency)"], ",", ""), 64)
-				if err == nil {
-					net[order] += v
+				if err != nil {
+					continue
 				}
+				e := out[order]
+				switch t := strings.ToLower(r["Transaction Type"]); {
+				case t == "charge":
+					e.Gross += v
+					e.HasCharge = true
+				case strings.HasPrefix(t, "charge"): // Charge refund, chargeback
+					e.Gross += v
+				case strings.HasPrefix(t, "google fee"):
+					e.Fee += v
+				case strings.HasPrefix(t, "tax"):
+					e.Tax += v
+					e.HasTax = true
+				default:
+					e.Other += v
+				}
+				if c := r["Buyer Country"]; c != "" {
+					e.Country = c
+				}
+				out[order] = e
 			}
 		}
-	}
-	out := make(map[string]int64, len(net))
-	for o, v := range net {
-		out[o] = int64(math.Round(v * 100))
 	}
 	return out, nil
 }

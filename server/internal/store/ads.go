@@ -378,6 +378,8 @@ type Purchase struct {
 	TokenHash   string
 	Region      string
 	Verified    bool
+	TokenEnc    []byte // sealed Play token, kept only while unverified
+	VerifyError string
 }
 
 // SavePurchase stores a purchase once per token. A row saved unverified (Google was down or not set up) is
@@ -385,12 +387,13 @@ type Purchase struct {
 // the call inserted or upgraded a row.
 func (s *Store) SavePurchase(ctx context.Context, p Purchase) (bool, error) {
 	rows, err := s.DB.Query(ctx, `INSERT INTO purchases (product_id, install_id, kind, sku, amount_paise, net_paise, currency, order_id,
-		token_hash, region, verified) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		token_hash, region, verified, token_enc, verify_error) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		ON CONFLICT (token_hash) WHERE token_hash IS NOT NULL DO UPDATE SET order_id=EXCLUDED.order_id, region=EXCLUDED.region,
-			net_paise=EXCLUDED.net_paise, verified=EXCLUDED.verified
+			amount_paise=EXCLUDED.amount_paise, net_paise=EXCLUDED.net_paise, verified=EXCLUDED.verified, token_enc=NULL, verify_error=''
 		WHERE NOT purchases.verified AND EXCLUDED.verified
 		RETURNING id`,
-		p.ProductID, p.InstallID, p.Kind, p.SKU, p.AmountPaise, p.NetPaise, p.Currency, p.OrderID, p.TokenHash, p.Region, p.Verified)
+		p.ProductID, p.InstallID, p.Kind, p.SKU, p.AmountPaise, p.NetPaise, p.Currency, p.OrderID, p.TokenHash, p.Region, p.Verified,
+		p.TokenEnc, p.VerifyError)
 	if err != nil {
 		return false, err
 	}
@@ -477,6 +480,9 @@ func (s *Store) Cleanup(ctx context.Context, today time.Time) error {
 	if _, err := s.DB.Exec(ctx, `DELETE FROM oauth_states_used WHERE used_at < $1::date - 2`, today); err != nil {
 		return err
 	}
+	if _, err := s.DB.Exec(ctx, `UPDATE purchases SET token_enc=NULL WHERE token_enc IS NOT NULL AND created_at < $1::date - 30`, today); err != nil {
+		return err
+	}
 	_, err := s.DB.Exec(ctx, `UPDATE installs SET referrer='', utm_content='' WHERE referrer <> '' AND created_at < $1::date - 90`, today)
 	return err
 }
@@ -492,7 +498,7 @@ func (s *Store) EraseInstall(ctx context.Context, installID string) (int64, erro
 			`DELETE FROM feature_votes WHERE install_id=$1`,
 			`DELETE FROM public_hits WHERE install_id=$1`,
 			`DELETE FROM tickets WHERE install_id=$1`,
-			`UPDATE purchases SET install_id='erased' WHERE install_id=$1`,
+			`UPDATE purchases SET install_id='erased', token_enc=NULL WHERE install_id=$1`,
 			`UPDATE promo_codes SET claimed_install=NULL WHERE claimed_install=$1`, // claimed_at stays: the code is not given out again
 		} {
 			tag, err := tx.Exec(ctx, q, installID)

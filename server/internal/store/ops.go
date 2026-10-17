@@ -235,13 +235,65 @@ func (s *Store) UseState(ctx context.Context, stateHash string) (bool, error) {
 	return err == nil && tag.RowsAffected() == 1, err
 }
 
-// UncheckedPurchases counts purchases still waiting for Google's confirmation, saved between since and before.
-// Tester and promo-code rows are not waiting for anything.
-func (s *Store) UncheckedPurchases(ctx context.Context, since, before time.Time) (int64, error) {
-	var n int64
-	err := s.DB.QueryRow(ctx, `SELECT count(*) FROM purchases WHERE NOT verified AND region NOT IN ('TEST','PROMO')
-		AND refunded_at IS NULL AND created_at >= $1 AND created_at < $2`, since, before).Scan(&n)
-	return n, err
+// Unchecked is what the alert says about purchases still waiting for Google's confirmation.
+type Unchecked struct {
+	Count   int64
+	Reasons []string // distinct verify errors, most common first
+}
+
+// UncheckedPurchases looks at purchases saved between since and before that Google has not confirmed yet.
+// Tester, promo-code and refused rows are not waiting for anything.
+func (s *Store) UncheckedPurchases(ctx context.Context, since, before time.Time) (Unchecked, error) {
+	var u Unchecked
+	rows, err := s.DB.Query(ctx, `SELECT verify_error, count(*) FROM purchases WHERE NOT verified
+		AND region NOT IN ('TEST','PROMO','REFUSED') AND refunded_at IS NULL AND created_at >= $1 AND created_at < $2
+		GROUP BY 1 ORDER BY 2 DESC`, since, before)
+	if err != nil {
+		return u, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var why string
+		var n int64
+		if err := rows.Scan(&why, &n); err != nil {
+			return u, err
+		}
+		u.Count += n
+		if why != "" {
+			u.Reasons = append(u.Reasons, why)
+		}
+	}
+	return u, rows.Err()
+}
+
+// Pending is an unconfirmed purchase the sync can re-check with Google.
+type Pending struct {
+	ID int64
+	Purchase
+}
+
+func (s *Store) PendingPurchases(ctx context.Context, since time.Time, limit int) ([]Pending, error) {
+	rows, err := s.DB.Query(ctx, `SELECT id, product_id, install_id, kind, sku, amount_paise, token_hash, token_enc FROM purchases
+		WHERE NOT verified AND token_enc IS NOT NULL AND refunded_at IS NULL AND created_at >= $1 ORDER BY id LIMIT $2`, since, limit)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Pending, error) {
+		var p Pending
+		return p, r.Scan(&p.ID, &p.ProductID, &p.InstallID, &p.Kind, &p.SKU, &p.AmountPaise, &p.TokenHash, &p.TokenEnc)
+	})
+}
+
+// ResolvePending writes Google's answer for a re-checked purchase. A confirmed, tester, promo or refused one
+// drops its token; one still waiting keeps it and records why.
+func (s *Store) ResolvePending(ctx context.Context, id int64, p Purchase, done bool) error {
+	if !done {
+		_, err := s.DB.Exec(ctx, `UPDATE purchases SET verify_error=$2 WHERE id=$1`, id, p.VerifyError)
+		return err
+	}
+	_, err := s.DB.Exec(ctx, `UPDATE purchases SET order_id=$2, region=$3, amount_paise=$4, net_paise=$5, verified=$6,
+		token_enc=NULL, verify_error='' WHERE id=$1 AND NOT verified`, id, p.OrderID, p.Region, p.AmountPaise, p.NetPaise, p.Verified)
+	return err
 }
 
 // SetExactNet replaces estimated net amounts with Google's earnings-report figures, per order id.

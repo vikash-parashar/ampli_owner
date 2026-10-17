@@ -197,3 +197,12 @@ An alert fires when 5 or fewer codes are left and buyers are still waiting. Hook
   window); `GET /v1/promo` adds `refunded_claims`.
 - Campaigns add `spend_7d_paise`, `revenue_7d_paise`, `roas_7d`, `judged_on` and `judge_roas`. With 14+ days of spend
   the verdict, stop alerts and auto-stop use the last 7 days (`judged_on = last_7_days`), otherwise lifetime totals.
+
+## Review pass 4 (2026-10-17)
+- Earnings: rows are typed (Charge, Charge refund, Google fee, Tax). For Indian buyers with no Tax row the 18% GST
+  share is taken out of the gross (to be confirmed on one real `earnings_YYYYMM` file). The last two months are merged
+  before writing, and only orders whose original Charge is in them are updated, so a partial refund next month nets out.
+- Unconfirmed purchases keep their Play token sealed with `TOKEN_KEY` (`purchases.token_enc`) and the reason
+  (`verify_error`). The daily sync re-checks up to 200 of them (`rechecked` in the sync answer) and wipes the token once
+  Google answers; Cleanup wipes tokens older than 30 days. Refused tokens become region `REFUSED`. The alert names the
+  reason (service account, or "sku X not found") and the 30-day limit.
