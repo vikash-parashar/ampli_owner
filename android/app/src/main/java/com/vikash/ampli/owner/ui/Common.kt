@@ -1,5 +1,8 @@
 package com.vikash.ampli.owner.ui
 
+import com.vikash.ampli.owner.R
+import androidx.compose.ui.res.painterResource
+import androidx.compose.foundation.Image
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -315,9 +318,22 @@ fun Legend(items: List<Pair<String, Color>>, modifier: Modifier = Modifier) {
     }
 }
 
-/** A rounded square with the product's colour and initial (stands in for the app icon). */
+/** The product's app icon (MP3, Car Hub), or a rounded square with its colour and initial (Naukri). */
 @Composable
 fun ProductBadge(id: String, size: Dp = 36.dp, onAccent: Boolean = false) {
+    val icon = when (id) {
+        "mp3" -> R.drawable.logo_mp3
+        "carhub" -> R.drawable.logo_carhub
+        else -> 0
+    }
+    if (icon != 0) {
+        Image(
+            painterResource(icon),
+            contentDescription = null,
+            modifier = Modifier.size(size).clip(RoundedCornerShape(size * 0.3f)),
+        )
+        return
+    }
     val letter = when (id) {
         "mp3" -> "M"
         "carhub" -> "C"
