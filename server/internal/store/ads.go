@@ -119,6 +119,7 @@ type Campaign struct {
 	// has 14+ days of spend, so one that started well and turned bad is still caught.
 	JudgedOn      string    `json:"judged_on"`
 	JudgeROAS     float64   `json:"judge_roas"`
+	JudgeSpend    int64     `json:"judge_spend_paise"` // the spend JudgeROAS rests on
 	CreatedAt     time.Time `json:"created_at"`
 	ExternalID    string    `json:"-"`
 	ExternalSetID string    `json:"-"`
@@ -127,6 +128,10 @@ type Campaign struct {
 
 // RecentAfterDays is how many days of spend a campaign needs before it is judged on its last 7 days.
 const RecentAfterDays = 14
+
+// RecentMinSpendPaise is the least 7-day spend (₹500) that a 7-day ROAS is trusted on; below it the lifetime
+// numbers stay, so a few rupees of recent spend can't decide the verdict.
+const RecentMinSpendPaise = 50000
 
 // AutoStop pauses a live campaign once ROAS stays below MinROAS after MinDays of spend and MinSpendPaise.
 type AutoStop struct {
@@ -205,10 +210,10 @@ func scanCampaign(r pgx.Row) (Campaign, error) {
 	if c.Spend7Paise > 0 {
 		c.ROAS7 = float64(c.Revenue7Paise) / float64(c.Spend7Paise)
 	}
-	c.JudgedOn, c.JudgeROAS = "lifetime", c.ROAS
+	c.JudgedOn, c.JudgeROAS, c.JudgeSpend = "lifetime", c.ROAS, c.SpendPaise
 	c.Verdict = ads.Judge(c.Status, c.SpendPaise, c.RevenuePaise, c.Days)
-	if c.Days >= RecentAfterDays && c.Spend7Paise > 0 {
-		c.JudgedOn, c.JudgeROAS = "last_7_days", c.ROAS7
+	if c.Days >= RecentAfterDays && c.Spend7Paise >= RecentMinSpendPaise {
+		c.JudgedOn, c.JudgeROAS, c.JudgeSpend = "last_7_days", c.ROAS7, c.Spend7Paise
 		c.Verdict = ads.Judge(c.Status, c.Spend7Paise, c.Revenue7Paise, c.Days)
 		if oneOfCode(c.Verdict.Code, "scale", "watch", "stop") {
 			c.Verdict.Reason = "Last 7 days: " + c.Verdict.Reason

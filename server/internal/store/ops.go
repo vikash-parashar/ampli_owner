@@ -274,7 +274,8 @@ type Pending struct {
 
 func (s *Store) PendingPurchases(ctx context.Context, since time.Time, limit int) ([]Pending, error) {
 	rows, err := s.DB.Query(ctx, `SELECT id, product_id, install_id, kind, sku, amount_paise, token_hash, token_enc FROM purchases
-		WHERE NOT verified AND token_enc IS NOT NULL AND refunded_at IS NULL AND created_at >= $1 ORDER BY id LIMIT $2`, since, limit)
+		WHERE NOT verified AND token_enc IS NOT NULL AND refunded_at IS NULL AND created_at >= $1
+		ORDER BY checked_at NULLS FIRST, id LIMIT $2`, since, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -288,7 +289,7 @@ func (s *Store) PendingPurchases(ctx context.Context, since time.Time, limit int
 // drops its token; one still waiting keeps it and records why.
 func (s *Store) ResolvePending(ctx context.Context, id int64, p Purchase, done bool) error {
 	if !done {
-		_, err := s.DB.Exec(ctx, `UPDATE purchases SET verify_error=$2 WHERE id=$1`, id, p.VerifyError)
+		_, err := s.DB.Exec(ctx, `UPDATE purchases SET verify_error=$2, checked_at=now() WHERE id=$1`, id, p.VerifyError)
 		return err
 	}
 	_, err := s.DB.Exec(ctx, `UPDATE purchases SET order_id=$2, region=$3, amount_paise=$4, net_paise=$5, verified=$6,

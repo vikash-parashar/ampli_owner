@@ -146,3 +146,33 @@ func TestSyncRechecksUnconfirmedPurchases(t *testing.T) {
 		t.Fatalf("after recheck verified=%v token kept=%v", verified, left != nil)
 	}
 }
+
+// Our own error during the re-check (here: the products table can't be read) leaves the sale waiting with its
+// token, rotated to the back of the queue; only Google refusing the token marks it REFUSED.
+func TestRecheckKeepsSaleOnOurError(t *testing.T) {
+	box, _ := secret.New(base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")))
+	srv, st := newServerWith(t, func(s *api.Server) { s.Play = fakePlay(t); s.Box = box })
+	ctx := context.Background()
+	playDown.Store(true)
+	p := map[string]any{"product": "mp3", "install_id": "88888888-8888-4888-8888-888888888888", "kind": "pro",
+		"sku": "ampli_pro", "purchase_token": "flaky-ourerror-token-1"}
+	if code := call(t, srv, "POST", "/v1/public/purchases", false, p, nil); code != 503 {
+		t.Fatalf("google down: %d", code)
+	}
+	playDown.Store(false)
+	if _, err := st.DB.Exec(ctx, `ALTER TABLE products RENAME TO products_gone`); err != nil {
+		t.Fatal(err)
+	}
+	var res api.SyncResult
+	call(t, srv, "POST", "/v1/integrations/sync", true, nil, &res)
+	if _, err := st.DB.Exec(ctx, `ALTER TABLE products_gone RENAME TO products`); err != nil {
+		t.Fatal(err)
+	}
+	var region string
+	var left []byte
+	var checked *time.Time
+	st.DB.QueryRow(ctx, `SELECT region, token_enc, checked_at FROM purchases`).Scan(&region, &left, &checked)
+	if region == "REFUSED" || left == nil || checked == nil {
+		t.Fatalf("region=%q token kept=%v checked=%v", region, left != nil, checked)
+	}
+}

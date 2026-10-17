@@ -584,7 +584,11 @@ func (s *Server) applyAutoStop(ctx context.Context, accountID int64, p ads.Platf
 		if r.HoldUntil != nil && now.Before(*r.HoldUntil) {
 			continue
 		}
-		below := c.Attribution != "none" && c.Days >= r.MinDays && c.SpendPaise >= r.MinSpendPaise && c.JudgeROAS < r.MinROAS
+		if c.JudgedOn == "last_7_days" && c.JudgeSpend < r.MinSpendPaise {
+			// The owner's spend floor is higher than the last 7 days' spend: judge on lifetime, where the floor was met.
+			c.JudgedOn, c.JudgeROAS, c.JudgeSpend = "lifetime", c.ROAS, c.SpendPaise
+		}
+		below := c.Attribution != "none" && c.Days >= r.MinDays && c.JudgeSpend >= r.MinSpendPaise && c.JudgeROAS < r.MinROAS
 		if !below {
 			if r.PendingSince != nil {
 				_ = s.Store.SetAutoStrike(ctx, c.ID, nil)
@@ -592,7 +596,7 @@ func (s *Server) applyAutoStop(ctx context.Context, accountID int64, p ads.Platf
 			}
 			continue
 		}
-		detail := fmt.Sprintf("ROAS %.2fx (%s) after %d days and %s spent (rule: below %.2fx)", c.JudgeROAS, judgedOn(c), c.Days, rupees(c.SpendPaise), r.MinROAS)
+		detail := fmt.Sprintf("ROAS %.2fx on %s spent (%s), %d days live (rule: below %.2fx)", c.JudgeROAS, rupees(c.JudgeSpend), judgedOn(c), c.Days, r.MinROAS)
 		if r.PendingSince == nil {
 			_ = s.Store.SetAutoStrike(ctx, c.ID, &now)
 			_ = s.Store.LogCampaign(ctx, c.ID, "rule", "will pause", detail+"; pauses at the next sync after 24 hours unless it improves")

@@ -115,7 +115,7 @@ func (c *Client) do(ctx context.Context, method, u, bearer string, body any, out
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u, rd)
 	if err != nil {
-		return err
+		return fmt.Errorf("Google Play: bad request: %w", noURL(err))
 	}
 	if ctype != "" {
 		req.Header.Set("Content-Type", ctype)
@@ -125,7 +125,7 @@ func (c *Client) do(ctx context.Context, method, u, bearer string, body any, out
 	}
 	resp, err := c.h.Do(req)
 	if err != nil {
-		return fmt.Errorf("Google Play: %w", err)
+		return fmt.Errorf("Google Play: %w", noURL(err))
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
@@ -142,6 +142,16 @@ func (c *Client) do(ctx context.Context, method, u, bearer string, body any, out
 		return json.Unmarshal(raw, out)
 	}
 	return nil
+}
+
+// noURL drops the request URL from a transport error: purchase URLs carry the buyer's purchase token, and the
+// error ends up in the logs.
+func noURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%s: %w", ue.Op, ue.Err)
+	}
+	return err
 }
 
 // HTTPError is a non-2xx answer from Google. Status 4xx means the request (e.g. a purchase token) was refused;

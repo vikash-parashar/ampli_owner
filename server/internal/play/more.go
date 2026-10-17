@@ -295,21 +295,44 @@ type EarningOrder struct {
 	Gross     float64 // "Charge" and "Charge refund" rows: what the buyer paid, net of refunds
 	Fee       float64 // "Google fee" rows (negative)
 	Tax       float64 // "Tax" rows Google withheld (negative)
+	TaxCredit float64 // tax rows that aren't the buyer's sales tax (TDS under 194-O, GST on Google's fee): kept apart, not a cost
 	Other     float64
 	Country   string
 	HasCharge bool // the original charge is in these reports (a refund-only order can't be priced from them)
 	HasTax    bool
 }
 
-// NetPaise is what the order leaves the developer with. For Indian buyers Google does not withhold GST (the
-// developer pays it), so with no Tax row the GST share (18%) is taken out of the gross here.
-// TODO(owner): confirm against one real earnings_YYYYMM file that IN orders have no Tax row.
+// IndiaGST is the GST rate on apps sold to Indian buyers.
+const IndiaGST = 0.18
+
+// NetPaise is what the order leaves the developer with.
+//
+// Indian buyers: Google does not withhold GST on a developer's sales in India (the developer files and pays it),
+// so the GST share (18/118 of the charge) is always taken out of the gross here. The one exception is an order
+// whose Tax rows add up to that GST share (Google did withhold it); then the Tax rows are subtracted as they are,
+// so GST is never removed twice. Any other tax row on an Indian order (TDS under section 194-O, GST on Google's
+// fee) is a credit the developer claims back, not a cost, so it is left out of the net.
+// TODO(owner): confirm against one real earnings_YYYYMM file which Tax rows IN orders carry.
 func (e EarningOrder) NetPaise() int64 {
-	gross := e.Gross
-	if e.Country == "IN" && !e.HasTax {
-		gross = gross * 100 / 118
+	if e.Country != "IN" {
+		return int64(math.Round((e.Gross + e.Fee + e.Tax + e.TaxCredit + e.Other) * 100)) // abroad every tax row is a cost
 	}
-	return int64(math.Round((gross + e.Fee + e.Tax + e.Other) * 100))
+	gst := e.Gross * IndiaGST / (1 + IndiaGST)
+	if e.HasTax && gst > 0 && math.Abs(-e.Tax-gst) <= math.Max(0.02, gst*0.02) {
+		return int64(math.Round((e.Gross + e.Fee + e.Tax + e.Other) * 100)) // Google withheld the GST
+	}
+	return int64(math.Round((e.Gross - gst + e.Fee + e.Other) * 100))
+}
+
+// isTaxCredit says a tax row is TDS or tax on Google's own fee, not sales tax on the buyer's payment.
+func isTaxCredit(txType, taxType string) bool {
+	t := strings.ToLower(txType + " " + taxType)
+	for _, k := range []string{"tds", "194", "withholding", "income tax", "fee"} {
+		if strings.Contains(t, k) {
+			return true
+		}
+	}
+	return false
 }
 
 // MergeEarnings adds month b into a, so an order charged in one month and partly refunded in the next adds up.
@@ -322,6 +345,7 @@ func MergeEarnings(a, b map[string]EarningOrder) map[string]EarningOrder {
 		m.Gross += e.Gross
 		m.Fee += e.Fee
 		m.Tax += e.Tax
+		m.TaxCredit += e.TaxCredit
 		m.Other += e.Other
 		m.HasCharge = m.HasCharge || e.HasCharge
 		m.HasTax = m.HasTax || e.HasTax
@@ -392,6 +416,8 @@ func (c *Client) Earnings(ctx context.Context, bucket string, month time.Time) (
 					e.Gross += v
 				case strings.HasPrefix(t, "google fee"):
 					e.Fee += v
+				case strings.HasPrefix(t, "tax") && isTaxCredit(t, r["Tax Type"]):
+					e.TaxCredit += v
 				case strings.HasPrefix(t, "tax"):
 					e.Tax += v
 					e.HasTax = true

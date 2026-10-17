@@ -206,3 +206,15 @@ An alert fires when 5 or fewer codes are left and buyers are still waiting. Hook
   (`verify_error`). The daily sync re-checks up to 200 of them (`rechecked` in the sync answer) and wipes the token once
   Google answers; Cleanup wipes tokens older than 30 days. Refused tokens become region `REFUSED`. The alert names the
   reason (service account, or "sku X not found") and the 30-day limit.
+
+## Review pass 5 (2026-10-17)
+
+- Play transport errors no longer include the request URL, so purchase tokens never reach the logs.
+- The daily purchase re-check marks a sale REFUSED only when Google refuses the token (422). Our own errors and
+  Google outages keep the sealed token for the next day.
+- The re-check asks about the rows it checked longest ago first (`purchases.checked_at`, migration 0010), so
+  stuck rows can't starve new ones.
+- Indian orders: the 18/118 GST share always comes out of the charge, unless the Tax rows equal that share
+  (Google withheld it). TDS (194-O) and tax on Google's fee are kept apart as `TaxCredit`, not a cost.
+- Campaigns switch to their last-7-days verdict only with at least ₹500 spent in those 7 days. Auto-stop checks
+  its spend floor against the same window as the ROAS it uses (`judge_spend_paise`), falling back to lifetime.

@@ -277,12 +277,12 @@ func (s *Server) recheckPurchases(ctx context.Context) int {
 		v := s.verifyPurchase(ctx, p.ProductID, p.SKU, token, &p)
 		switch {
 		case v.status == 0:
-		case v.keep || v.status == http.StatusConflict:
+		case v.status == http.StatusUnprocessableEntity: // Google refused the token or it was cancelled: not money, stop asking
+			p.Region, p.Verified, p.NetPaise = "REFUSED", false, 0
+		default: // still waiting (our setup, Google down, payment pending, or our own error): keep the token, ask again tomorrow
 			p.VerifyError = firstOf(v.reason, v.msg)
 			_ = s.Store.ResolvePending(ctx, pp.ID, p, false)
 			continue
-		default: // Google refused the token: not money, stop asking
-			p.Region, p.Verified, p.NetPaise = "REFUSED", false, 0
 		}
 		if err := s.Store.ResolvePending(ctx, pp.ID, p, true); err == nil {
 			done++
