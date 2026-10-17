@@ -23,7 +23,6 @@ import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -44,72 +43,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.vikash.ampli.owner.data.Products
 import com.vikash.ampli.owner.data.Ticket
-import com.vikash.ampli.owner.data.rupees
-
-@Composable
-fun HomeScreen(nav: Nav, modifier: Modifier) {
-    Loadable(nav.tick, { nav.repo.overview() }, nav::refresh) { o ->
-        Page(modifier) {
-            if (!nav.repo.isRemote) item {
-                OwnerCard(onClick = { nav.go(Route.Settings) }) {
-                    Text("Saved on this phone only", fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "Connect the Ampli Owner server in Settings to receive in-app reports from your users.",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            if (o.waitingOnOwner > 0) item {
-                OwnerCard(onClick = { nav.tab = Tab.Inbox }) {
-                    Text("${o.waitingOnOwner} ticket(s) waiting on you", fontWeight = FontWeight.SemiBold, color = Bad)
-                    Text("Open the inbox to reply", style = MaterialTheme.typography.bodySmall)
-                }
-            }
-            item { Section("Last 7 days") }
-            item {
-                val s = o.last7Days
-                KpiRow(
-                    Triple("Revenue", rupees(s.proRevenuePaise + s.adRevenuePaise), "${s.proSales} Pro sales + ads"),
-                    Triple("Installs", "${s.installs}", "${s.uninstalls} uninstalls"),
-                )
-            }
-            item {
-                KpiRow(
-                    Triple("Open tickets", "${o.openTickets}", "${o.ticketsByKind["bug"] ?: 0} bugs · ${o.ticketsByKind["support"] ?: 0} support"),
-                    Triple("Feature asks", "${o.ticketsByKind["feature"] ?: 0}", "open requests"),
-                )
-            }
-            item { Section("Launch checklist") }
-            item {
-                OwnerCard(onClick = { nav.go(Route.Checklist) }) {
-                    Row(Modifier.fillMaxWidth()) {
-                        Text("${o.checklistDone} of ${o.checklistTotal} done", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                        Text("${o.checklistInProgress} in progress", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    LinearProgressIndicator(
-                        progress = { if (o.checklistTotal == 0) 0f else o.checklistDone.toFloat() / o.checklistTotal },
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                    )
-                    o.nextChecklistItem?.let { Text("Next: ${it.title}", style = MaterialTheme.typography.bodySmall) }
-                }
-            }
-            item { Section("Your to-do") }
-            item {
-                OwnerCard(onClick = { nav.go(Route.Todos) }) {
-                    if (o.openTodos.isEmpty()) Text("Nothing open. Tap to add one.")
-                    o.openTodos.forEach { t ->
-                        Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Dot(productColor(t.product), 8)
-                            Spacer(Modifier.width(10.dp))
-                            Text(t.title, modifier = Modifier.weight(1f))
-                            t.due?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
 @Composable
 fun InboxScreen(nav: Nav, modifier: Modifier) {

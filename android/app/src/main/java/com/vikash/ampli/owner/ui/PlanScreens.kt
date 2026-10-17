@@ -2,6 +2,7 @@ package com.vikash.ampli.owner.ui
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,6 +20,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -34,10 +36,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.vikash.ampli.owner.data.ChecklistItem
 import com.vikash.ampli.owner.data.Products
 import com.vikash.ampli.owner.data.Settings
@@ -55,10 +60,11 @@ fun PlanScreen(nav: Nav, modifier: Modifier) {
             }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Tile("Built vs left", "both products", Modifier.weight(1f)) { nav.tab = Tab.Products }
+                    Tile("Built vs left", "roadmap for every app", Modifier.weight(1f)) { nav.go(Route.Roadmap) }
                     Tile("Guides", "Play, GST, trademark", Modifier.weight(1f)) { nav.go(Route.Guides) }
                 }
             }
+            item { MoreFromAmpliCard() }
             item { Section("Business decisions") }
             item {
                 OwnerCard {
@@ -76,8 +82,73 @@ fun PlanScreen(nav: Nav, modifier: Modifier) {
                     }
                 }
             }
+            item {
+                AmpliCard {
+                    CardTitle("Server", "your own")
+                    Text(
+                        "Ad account tokens are stored on your server, never on the phone. The app only shows numbers " +
+                            "and sends Pause, Resume and Budget actions.",
+                        fontSize = 11.5.sp, color = ampli().muted,
+                    )
+                }
+            }
         }
     }
+}
+
+/** A preview of the "More from Ampli" list and the chai tip card that every Ampli app shows in Settings. */
+@Composable
+private fun MoreFromAmpliCard() {
+    val a = ampli()
+    val taglines = mapOf(
+        "mp3" to "Your music, no monthly fee",
+        "carhub" to "The car that talks Haryanvi",
+        "naukri" to "Free sarkari job alerts",
+    )
+    AmpliCard {
+        CardTitle("In every Ampli app", "Settings › More from Ampli")
+        Products.names.forEach { (id, name) ->
+            Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                ProductBadge(id)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(name, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text(taglines[id] ?: "", fontSize = 11.5.sp, color = a.muted)
+                }
+                PreviewButton("Get", a.surface2, a.text)
+            }
+        }
+        HorizontalDivider(color = a.line, modifier = Modifier.padding(top = 4.dp))
+        Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(a.warnBg),
+                contentAlignment = Alignment.Center,
+            ) { Text("☕", fontSize = 17.sp) }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Buy the developer a chai", fontSize = 13.5.sp, fontWeight = FontWeight.Bold)
+                Text("₹49 · ₹99 · ₹199, helps Ampli grow", fontSize = 11.5.sp, color = a.muted)
+            }
+            PreviewButton("Support", accent(), Color.White)
+        }
+        Text(
+            "Owner tracks tips as \"Support\" revenue for each app.",
+            fontSize = 11.5.sp, color = a.muted, textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        )
+    }
+}
+
+/** Looks like the in-app button; this is only a preview, so it does nothing here. */
+@Composable
+private fun PreviewButton(text: String, bg: Color, fg: Color) {
+    Text(
+        text, color = fg, fontSize = 12.5.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(11.dp))
+            .background(bg)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    )
 }
 
 @Composable

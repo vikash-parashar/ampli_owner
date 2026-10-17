@@ -44,6 +44,22 @@ interface Repo {
     suspend fun campaigns(): List<Campaign>
     suspend fun saveCampaign(c: Campaign)
     suspend fun guides(): List<Guide>
+
+    // API v2 (docs/api-v2.md). Product is "all", "mp3", "carhub" or "naukri".
+    suspend fun dashboard(product: String): Dashboard
+    suspend fun adPlatforms(): List<AdsPlatform>
+    /** Starts the OAuth sign-in for an ad platform and returns the URL to open in the browser. */
+    suspend fun connectAds(platform: String): String
+    suspend fun deleteAdAccount(id: Long)
+    suspend fun adCampaigns(product: String): AdsCampaignsResponse
+    suspend fun createCampaign(c: NewCampaign): AdCampaign
+    suspend fun pauseCampaign(id: Long): AdCampaign
+    suspend fun resumeCampaign(id: Long): AdCampaign
+    suspend fun setBudget(id: Long, dailyBudgetPaise: Long): AdCampaign
+    /** Pulls spend, clicks and installs from every connected ad account; returns how many synced. */
+    suspend fun syncAds(): Int
+    suspend fun reviews(product: String): ReviewsResponse
+    suspend fun replyReview(id: Long, text: String)
 }
 
 // ---------------- local (on-device JSON file, seeded from assets) ----------------
@@ -197,6 +213,79 @@ class LocalRepo(private val context: Context) : Repo {
     }
 
     override suspend fun guides() = read { it.guides }
+
+    // ---- API v2 in phone-only mode: deterministic sample data, changes kept in memory only ----
+
+    private val mem = Mutex()
+    private var sampleCampaigns: List<AdCampaign> = Sample.campaigns()
+    private var samplePlatforms: List<AdsPlatform> = Sample.platforms()
+    private var sampleReviews: List<Review> = Sample.reviews()
+
+    private suspend fun <T> inMemory(f: () -> T): T = mem.withLock { f() }
+
+    override suspend fun dashboard(product: String): Dashboard = inMemory { Sample.dashboard(product, sampleCampaigns) }
+
+    override suspend fun adPlatforms(): List<AdsPlatform> = inMemory { samplePlatforms }
+
+    override suspend fun connectAds(platform: String): String =
+        throw IllegalStateException("Connect a server in Settings first")
+
+    override suspend fun deleteAdAccount(id: Long) = inMemory {
+        samplePlatforms = samplePlatforms.map { p -> p.copy(accounts = p.accounts.filter { it.id != id }) }
+    }
+
+    override suspend fun adCampaigns(product: String): AdsCampaignsResponse = inMemory {
+        AdsCampaignsResponse(
+            summary = Sample.summary(product, sampleCampaigns),
+            campaigns = sampleCampaigns.filter { product == "all" || it.product == product },
+        )
+    }
+
+    override suspend fun createCampaign(c: NewCampaign): AdCampaign = inMemory {
+        val id = (sampleCampaigns.maxOfOrNull { it.id } ?: 0L) + 1L
+        val platform = samplePlatforms.firstOrNull { p -> p.accounts.any { it.id == c.adAccountId } }?.id ?: "meta"
+        val status = if (c.launch) "in_review" else "paused"
+        val made = AdCampaign(
+            id = id, platform = platform, product = c.product, name = c.name, status = status,
+            countries = c.countries, dailyBudgetPaise = c.dailyBudgetPaise, days = 0,
+            verdict = Sample.verdict("in_review", 0, 0.0), adAccountId = c.adAccountId, utmCampaign = "ampli-c$id",
+        )
+        sampleCampaigns = listOf(made) + sampleCampaigns
+        made
+    }
+
+    private fun changeCampaign(id: Long, f: (AdCampaign) -> AdCampaign): AdCampaign {
+        val old = sampleCampaigns.firstOrNull { it.id == id } ?: throw IllegalArgumentException("No campaign $id")
+        val changed = f(old)
+        sampleCampaigns = sampleCampaigns.map { if (it.id == id) changed else it }
+        return changed
+    }
+
+    override suspend fun pauseCampaign(id: Long): AdCampaign = inMemory { changeCampaign(id) { it.copy(status = "paused") } }
+
+    override suspend fun resumeCampaign(id: Long): AdCampaign = inMemory {
+        changeCampaign(id) { c ->
+            val status = if (c.status == "draft") "in_review" else if (c.days == 0) "in_review" else "live"
+            c.copy(status = status, verdict = Sample.verdict(status, c.days, c.roas))
+        }
+    }
+
+    override suspend fun setBudget(id: Long, dailyBudgetPaise: Long): AdCampaign =
+        inMemory { changeCampaign(id) { it.copy(dailyBudgetPaise = dailyBudgetPaise) } }
+
+    override suspend fun syncAds(): Int = 0
+
+    override suspend fun reviews(product: String): ReviewsResponse = inMemory {
+        ReviewsResponse(
+            summary = Sample.reviewSummary(product),
+            themes = Sample.themes,
+            reviews = sampleReviews.filter { product == "all" || it.product == product },
+        )
+    }
+
+    override suspend fun replyReview(id: Long, text: String) = inMemory {
+        sampleReviews = sampleReviews.map { if (it.id == id) it.copy(reply = text) else it }
+    }
 }
 
 // ---------------- remote (Go server) ----------------
@@ -294,6 +383,50 @@ class RemoteRepo(baseUrl: String, private val token: String) : Repo {
     }
 
     override suspend fun guides() = get("/v1/guides", ListSerializer(Guide.serializer()))
+
+    // ---- API v2 ----
+
+    private suspend fun postCampaign(path: String, body: String = "{}"): AdCampaign =
+        json.decodeFromString(AdCampaign.serializer(), call("POST", path, body))
+
+    override suspend fun dashboard(product: String): Dashboard = get("/v1/dashboard?product=$product", Dashboard.serializer())
+
+    override suspend fun adPlatforms(): List<AdsPlatform> = get("/v1/ads/platforms", ListSerializer(AdsPlatform.serializer()))
+
+    override suspend fun connectAds(platform: String): String {
+        val o = json.decodeFromString(JsonObject.serializer(), call("POST", "/v1/ads/connect/$platform", "{}"))
+        val url = (o["auth_url"] as? JsonPrimitive)?.content ?: ""
+        if (url.isBlank() || url == "null") throw IllegalStateException("The server did not send a sign-in link")
+        return url
+    }
+
+    override suspend fun deleteAdAccount(id: Long) {
+        call("DELETE", "/v1/ads/accounts/$id")
+    }
+
+    override suspend fun adCampaigns(product: String): AdsCampaignsResponse =
+        get("/v1/ads/campaigns?product=$product", AdsCampaignsResponse.serializer())
+
+    override suspend fun createCampaign(c: NewCampaign): AdCampaign =
+        postCampaign("/v1/ads/campaigns", json.encodeToString(NewCampaign.serializer(), c))
+
+    override suspend fun pauseCampaign(id: Long): AdCampaign = postCampaign("/v1/ads/campaigns/$id/pause")
+
+    override suspend fun resumeCampaign(id: Long): AdCampaign = postCampaign("/v1/ads/campaigns/$id/resume")
+
+    override suspend fun setBudget(id: Long, dailyBudgetPaise: Long): AdCampaign =
+        postCampaign("/v1/ads/campaigns/$id/budget", buildJsonObject { put("daily_budget_paise", dailyBudgetPaise) }.toString())
+
+    override suspend fun syncAds(): Int {
+        val o = json.decodeFromString(JsonObject.serializer(), call("POST", "/v1/ads/sync", "{}"))
+        return (o["synced"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 0
+    }
+
+    override suspend fun reviews(product: String): ReviewsResponse = get("/v1/reviews?product=$product", ReviewsResponse.serializer())
+
+    override suspend fun replyReview(id: Long, text: String) {
+        call("POST", "/v1/reviews/$id/reply", buildJsonObject { put("text", text) }.toString())
+    }
 }
 
 /** Server address and owner token, kept in private app prefs on this phone. */

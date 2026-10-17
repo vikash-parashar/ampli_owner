@@ -1,12 +1,10 @@
 package com.vikash.ampli.owner.ui
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.items
@@ -23,24 +21,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import com.vikash.ampli.owner.data.Campaign
 import com.vikash.ampli.owner.data.DayStat
 import com.vikash.ampli.owner.data.Feature
 import com.vikash.ampli.owner.data.Products
-import com.vikash.ampli.owner.data.rupees
 import java.time.LocalDate
 
-private val prices = mapOf("mp3" to "₹199 Pro, one time", "carhub" to "₹499 Pro (₹299 launch)")
+private val prices = mapOf("mp3" to "₹199 Pro, one time", "carhub" to "₹499 Pro (₹299 launch)", "naukri" to "Free, leads + ads")
 private val roadmapStates = listOf("now" to "Now", "next" to "Next", "later" to "Later")
 
 @Composable
@@ -150,95 +142,7 @@ private fun AddFeatureDialog(product: String, onDismiss: () -> Unit, onSave: (Fe
     )
 }
 
-// ---------------- money ----------------
-
-@Composable
-fun MoneyScreen(nav: Nav, modifier: Modifier) {
-    var days by rememberSaveable { mutableStateOf(30) }
-    var addingDay by remember { mutableStateOf(false) }
-    var editing by remember { mutableStateOf<Campaign?>(null) }
-    val to = LocalDate.now()
-    val from = to.minusDays(days - 1L)
-    Loadable(nav.tick to days, { nav.repo.stats(from.toString(), to.toString()) to nav.repo.campaigns() }, nav::refresh) { (stats, campaigns) ->
-        Page(modifier) {
-            item { ChoiceRow(listOf("7" to "7 days", "30" to "30 days", "365" to "1 year"), days.toString()) { days = it.toInt() } }
-            item {
-                val pro = stats.sumOf { it.proRevenuePaise }
-                val ads = stats.sumOf { it.adRevenuePaise }
-                OwnerCard {
-                    Text("Revenue", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(rupees(pro + ads), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
-                    Text("Pro ${rupees(pro)} · Ads ${rupees(ads)}", style = MaterialTheme.typography.bodySmall)
-                    RevenueChart(stats, from, days)
-                }
-            }
-            item {
-                val mp3 = stats.filter { it.product == "mp3" }.sumOf { it.proSales }
-                val car = stats.filter { it.product == "carhub" }.sumOf { it.proSales }
-                KpiRow(Triple("MP3 Pro sales", "$mp3", "₹199 each"), Triple("Car Hub Pro sales", "$car", "₹299 to ₹499"))
-            }
-            item {
-                val installs = stats.sumOf { it.installs }
-                val sales = stats.sumOf { it.proSales }
-                val conv = if (installs == 0) "–" else "%.1f%%".format(sales * 100.0 / installs)
-                KpiRow(Triple("Installs", "$installs", "${stats.sumOf { it.uninstalls }} uninstalls"), Triple("Pro conversion", conv, "sales ÷ installs"))
-            }
-            item { OutlinedButton(onClick = { addingDay = true }) { Text("Enter a day's numbers") } }
-            item {
-                Text(
-                    "Until Play Console and AdMob are connected, type numbers from their dashboards here.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            item { Section("Ads and posts") }
-            items(campaigns, key = { it.id }) { c ->
-                OwnerCard(onClick = { editing = c }) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(c.name, fontWeight = FontWeight.SemiBold)
-                            Text(
-                                "${c.platform.replaceFirstChar { it.uppercase() }} · spent ${rupees(c.spendPaise)} of ${rupees(c.budgetPaise)} · ${c.installs} installs",
-                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Pill(c.status.replaceFirstChar { it.uppercase() }, if (c.status == "live") Good else Warn)
-                    }
-                }
-            }
-            item { OutlinedButton(onClick = { editing = Campaign(platform = "instagram", name = "") }) { Text("Add an ad or post") } }
-        }
-    }
-    if (addingDay) DayDialog(onDismiss = { addingDay = false }) { d ->
-        addingDay = false
-        nav.run("Saved") { nav.repo.putStat(d) }
-    }
-    editing?.let { c ->
-        CampaignDialog(c, onDismiss = { editing = null }) { saved ->
-            editing = null
-            nav.run("Saved") { nav.repo.saveCampaign(saved) }
-        }
-    }
-}
-
-@Composable
-private fun RevenueChart(stats: List<DayStat>, from: LocalDate, days: Int) {
-    val byDay = stats.groupBy { it.day }.mapValues { (_, v) -> v.sumOf { it.proRevenuePaise + it.adRevenuePaise } }
-    val values = (0 until days).map { byDay[from.plusDays(it.toLong()).toString()] ?: 0L }
-    val max = (values.maxOrNull() ?: 0L).coerceAtLeast(1L)
-    val line = MaterialTheme.colorScheme.primary
-    val grid = MaterialTheme.colorScheme.outlineVariant
-    Canvas(Modifier.fillMaxWidth().height(110.dp).padding(top = 12.dp)) {
-        drawLine(grid, Offset(0f, size.height), Offset(size.width, size.height), strokeWidth = 2f)
-        if (values.size < 2) return@Canvas
-        val step = size.width / (values.size - 1)
-        val pts = values.mapIndexed { i, v -> Offset(i * step, size.height - v.toFloat() / max * size.height * 0.9f) }
-        val path = Path().apply { pts.forEachIndexed { i, p -> if (i == 0) moveTo(p.x, p.y) else lineTo(p.x, p.y) } }
-        val fill = Path().apply { addPath(path); lineTo(size.width, size.height); lineTo(0f, size.height); close() }
-        drawPath(fill, line.copy(alpha = 0.12f))
-        drawPath(path, line, style = Stroke(width = 5f))
-        drawCircle(line, radius = 8f, center = pts.last())
-    }
-}
+// ---------------- numbers by hand (until Play sync exists) ----------------
 
 @Composable
 private fun NumField(label: String, value: String, onChange: (String) -> Unit) {
@@ -250,8 +154,9 @@ private fun NumField(label: String, value: String, onChange: (String) -> Unit) {
 
 private fun paise(rupees: String) = ((rupees.toDoubleOrNull() ?: 0.0) * 100).toLong()
 
+/** Enter one day's installs and money for a product (opened from the Dashboard). */
 @Composable
-private fun DayDialog(onDismiss: () -> Unit, onSave: (DayStat) -> Unit) {
+fun DayDialog(onDismiss: () -> Unit, onSave: (DayStat) -> Unit) {
     var product by remember { mutableStateOf("mp3") }
     var day by remember { mutableStateOf(LocalDate.now().minusDays(1).toString()) }
     var installs by remember { mutableStateOf("") }
@@ -286,36 +191,6 @@ private fun DayDialog(onDismiss: () -> Unit, onSave: (DayStat) -> Unit) {
                         rating = rating.toDoubleOrNull(),
                     ),
                 )
-            }) { Text("Save") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
-}
-
-@Composable
-private fun CampaignDialog(start: Campaign, onDismiss: () -> Unit, onSave: (Campaign) -> Unit) {
-    var c by remember { mutableStateOf(start) }
-    var budget by remember { mutableStateOf(if (start.budgetPaise > 0) (start.budgetPaise / 100).toString() else "") }
-    var spend by remember { mutableStateOf(if (start.spendPaise > 0) (start.spendPaise / 100).toString() else "") }
-    var installs by remember { mutableStateOf(if (start.installs > 0) start.installs.toString() else "") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (start.id == 0L) "New ad or post" else "Edit ad or post") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                OutlinedTextField(c.name, { c = c.copy(name = it) }, label = { Text("Name") }, singleLine = true)
-                ChoiceRow(listOf("instagram" to "Instagram", "facebook" to "Facebook", "youtube" to "YouTube", "google" to "Google"), c.platform) { c = c.copy(platform = it) }
-                ChoiceRow(listOf<Pair<String?, String>>(null to "Company") + Products.names.toList(), c.product) { c = c.copy(product = it) }
-                ChoiceRow(listOf("draft" to "Draft", "scheduled" to "Scheduled", "live" to "Live", "ended" to "Ended"), c.status) { c = c.copy(status = it) }
-                NumField("Budget ₹", budget) { budget = it }
-                NumField("Spent ₹", spend) { spend = it }
-                NumField("Installs from it", installs) { installs = it }
-                OutlinedTextField(c.postUrl, { c = c.copy(postUrl = it) }, label = { Text("Post link") }, singleLine = true)
-            }
-        },
-        confirmButton = {
-            TextButton(enabled = c.name.isNotBlank(), onClick = {
-                onSave(c.copy(budgetPaise = paise(budget), spendPaise = paise(spend), installs = installs.toDoubleOrNull()?.toLong() ?: 0))
             }) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
