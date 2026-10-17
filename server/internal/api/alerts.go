@@ -19,7 +19,7 @@ type Alert struct {
 	Product  string `json:"product"`  // "" when it is not about one app
 	Title    string `json:"title"`
 	Detail   string `json:"detail"`
-	Action   string `json:"action"` // open_ads, open_reviews, open_inbox, open_settings or ""
+	Action   string `json:"action"` // open_ads, open_reviews, open_inbox, open_settings, open_growth or ""
 }
 
 var severityRank = map[string]int{"high": 0, "medium": 1, "low": 2}
@@ -134,6 +134,19 @@ func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
 	}
 	if pl := ints["play"]; pl.LastError != "" {
 		add(Alert{ID: "play-error", Severity: "low", Action: "open_settings", Title: "Google Play sync had a problem", Detail: pl.LastError})
+	}
+
+	promos, err := s.Store.PromoReports(ctx)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	for _, p := range promos {
+		if p.Available <= 5 && p.Eligible > p.Claimed {
+			add(Alert{ID: "promo-low-" + p.Source + "-" + p.Target, Severity: "low", Product: p.Source, Action: "open_growth",
+				Title:  fmt.Sprintf("%d promo code%s left for the %s gift", p.Available, plural(p.Available), p.Target),
+				Detail: "Make more on Play Console's Promo codes page (up to 500 per app each quarter) and paste them in Growth > Cross-promo."})
+		}
 	}
 
 	waiting, err := s.Store.WaitingOnOwner(ctx)

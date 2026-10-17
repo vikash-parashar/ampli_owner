@@ -164,3 +164,23 @@ Answers (v1.2): 200 `{"recorded","verified"}`; 400 bad body or unknown sku and 4
 409 payment pending, 429 limit, 503 Google down or Play not connected (saved unverified, retry; the retry upgrades it).
 `product_id` is accepted instead of `sku`.
 `install_id` must be a UUID v4 on every public endpoint. Unknown event names are rejected.
+
+## v2.2 growth: tracked links, install channels, cross-promo codes
+
+**Tracked links** (owner): `GET /v1/links?product=`, `POST /v1/links {product, channel, label?, listing?, from_product?}`,
+`DELETE /v1/links/{id}` (hides it; past installs keep their channel). Channels: `play_hindi` (adds `listing=hindi` and
+`hl=hi`), `website`, `whatsapp`, `telegram`, `instagram` (unpaid, never counted as Meta ads), `youtube`, `crosspromo`
+(`from_product` = the app the link sits in), `other`. Each link answers its Play `url` with the install referrer
+`utm_source=<channel>&utm_medium=…&utm_campaign=ampli-l<id>` filled in, plus `installs`, `installs_30d`, `pro_sales`
+and `net_paise` from verified purchases of those installs.
+
+**Dashboard**: every product dashboard ends with a `channels` bars widget, "Where installs come from (30 days)":
+tracked-link channels, apps' own "More from Ampli" links (`utm_source=crosspromo`), ad platforms, our ad links,
+Play search and browse, and other.
+
+**Cross-promo codes**: `POST /v1/promo/codes {source_product, target_product, sku, codes[]}` imports Play promo codes
+(duplicates skipped, audited); `GET /v1/promo` reports per pair `imported`, `available`, `eligible` (verified Pro buyers
+of the source app), `claimed` and `redeemed` (promo purchases of the sku in the target app since the first claim).
+Public `POST /v1/public/promo/claim {product, install_id}` hands one code per verified Pro buyer (403 otherwise, 410 when
+none are left). Purchases Play marks `purchaseType = 1` are stored with region `PROMO`: counted, never revenue.
+An alert fires when 5 or fewer codes are left and buyers are still waiting. Hook spec v1.3 has the app side.

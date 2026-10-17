@@ -19,8 +19,9 @@ func ParseReferrer(raw string) Referrer {
 		Campaign: clip(q.Get("utm_campaign"), 120), Content: clip(q.Get("utm_content"), 500)}
 	src := strings.ToLower(r.Source)
 	switch {
-	case strings.HasPrefix(r.Campaign, "ampli-c"):
-		// Our own tracking link: matched to the campaign by utm_campaign, not by platform.
+	case strings.HasPrefix(r.Campaign, "ampli-c"), strings.HasPrefix(r.Campaign, "ampli-l"):
+		// Our own links (ad campaign or tracked channel link): matched by utm_campaign, not by platform, so an
+		// unpaid Instagram or WhatsApp link is never counted as a paid Meta install.
 	case strings.Contains(src, "facebook") || strings.Contains(src, "instagram") || src == "meta" || src == "fb":
 		r.Platform = "meta"
 	case strings.Contains(src, "tiktok") || strings.Contains(src, "bytedance"):

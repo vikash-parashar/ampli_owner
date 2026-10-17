@@ -35,6 +35,7 @@ func TestParseReferrer(t *testing.T) {
 		"gclid=abc123":                                                 "google",
 		"utm_source=google-play&utm_medium=organic":                    "",
 		"utm_source=meta&utm_campaign=ampli-c7":                        "",
+		"utm_source=instagram&utm_medium=social&utm_campaign=ampli-l3": "",
 	} {
 		if got := ParseReferrer(raw).Platform; got != want {
 			t.Errorf("%q: got %q want %q", raw, got, want)

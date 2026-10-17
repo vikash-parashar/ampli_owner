@@ -38,6 +38,8 @@ func fakePlay(t *testing.T) *play.Client {
 			json.NewEncoder(w).Encode(map[string]any{"purchaseState": 0, "orderId": "GPA." + tok, "regionCode": "IN"})
 		case strings.HasPrefix(tok, "pend-"):
 			json.NewEncoder(w).Encode(map[string]any{"purchaseState": 2, "orderId": "GPA." + tok})
+		case strings.HasPrefix(tok, "promo-"):
+			json.NewEncoder(w).Encode(map[string]any{"purchaseState": 0, "orderId": "GPA." + tok, "regionCode": "IN", "purchaseType": 1})
 		case strings.HasPrefix(tok, "test-"):
 			json.NewEncoder(w).Encode(map[string]any{"purchaseState": 0, "orderId": "GPA." + tok, "regionCode": "IN", "purchaseType": 0})
 		default:

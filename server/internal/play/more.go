@@ -20,7 +20,8 @@ type Purchase struct {
 	OrderID    string
 	RegionCode string
 	Time       time.Time
-	Test       bool // license tester or promo
+	Test       bool // not money: license tester, promo code or rewarded
+	Promo      bool // redeemed with a Play promo code (purchaseType 1)
 	Quantity   int64
 }
 
@@ -42,7 +43,7 @@ func (c *Client) ProductPurchase(ctx context.Context, pkg, sku, token string) (P
 	if err := c.do(ctx, "GET", u, tok, nil, &res); err != nil {
 		return Purchase{}, err
 	}
-	p := Purchase{State: res.State, OrderID: res.OrderID, RegionCode: res.RegionCode, Test: res.Type != nil, Quantity: max(res.Quantity, 1)}
+	p := Purchase{State: res.State, OrderID: res.OrderID, RegionCode: res.RegionCode, Test: res.Type != nil, Promo: res.Type != nil && *res.Type == 1, Quantity: max(res.Quantity, 1)}
 	if ms, err := strconv.ParseInt(res.TimeMillis, 10, 64); err == nil {
 		p.Time = time.UnixMilli(ms)
 	}

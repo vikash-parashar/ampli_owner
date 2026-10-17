@@ -466,6 +466,7 @@ func (s *Store) EraseInstall(ctx context.Context, installID string) (int64, erro
 			`DELETE FROM public_hits WHERE install_id=$1`,
 			`DELETE FROM tickets WHERE install_id=$1`,
 			`UPDATE purchases SET install_id='erased' WHERE install_id=$1`,
+			`UPDATE promo_codes SET claimed_install=NULL WHERE claimed_install=$1`, // claimed_at stays: the code is not given out again
 		} {
 			tag, err := tx.Exec(ctx, q, installID)
 			if err != nil {

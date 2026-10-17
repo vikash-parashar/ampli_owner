@@ -57,6 +57,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/public/installs", s.publicInstall)
 	mux.HandleFunc("POST /v1/public/purchases", s.publicPurchase)
 	mux.HandleFunc("POST /v1/public/events", s.publicEvents)
+	mux.HandleFunc("POST /v1/public/promo/claim", s.publicClaimPromo)
 	mux.HandleFunc("GET /oauth/{platform}/callback", s.oauthCallback)
 
 	// Owner only.
@@ -97,6 +98,11 @@ func (s *Server) Handler() http.Handler {
 	owner.HandleFunc("GET /v1/skus", s.skus)
 	owner.HandleFunc("PUT /v1/skus", s.saveSKU)
 	owner.HandleFunc("DELETE /v1/installs/{install}", s.eraseInstall)
+	owner.HandleFunc("GET /v1/links", s.links)
+	owner.HandleFunc("POST /v1/links", s.createLink)
+	owner.HandleFunc("DELETE /v1/links/{id}", s.deleteLink)
+	owner.HandleFunc("GET /v1/promo", s.promoReport)
+	owner.HandleFunc("POST /v1/promo/codes", s.importPromoCodes)
 	owner.HandleFunc("POST /v1/ads/sync", s.syncAds)
 	owner.HandleFunc("GET /v1/reviews", s.reviews)
 	owner.HandleFunc("POST /v1/reviews", s.addReview)

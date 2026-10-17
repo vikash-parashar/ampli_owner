@@ -219,6 +219,9 @@ func (s *Server) verifyPurchase(ctx context.Context, product, sku, token string,
 	p.OrderID, p.Region = gp.OrderID, gp.RegionCode
 	if gp.Test {
 		p.Region = "TEST" // license testers and promo codes are not money
+		if gp.Promo {
+			p.Region = "PROMO" // counted as a cross-promo redemption, not revenue
+		}
 		return purchaseCheck{}
 	}
 	p.AmountPaise *= gp.Quantity

@@ -174,6 +174,11 @@ func (s *Server) productDashboard(ctx context.Context, p string, today time.Time
 		}
 	}
 	d.Widgets = productWidgets(p, ev, installs30, proSales30)
+	ch, err := s.Store.ChannelInstalls(ctx, p, today.AddDate(0, 0, -29))
+	if err != nil {
+		return d, err
+	}
+	d.Widgets = append(d.Widgets, channelWidget(ch))
 	return d, nil
 }
 

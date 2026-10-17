@@ -234,7 +234,7 @@ func TestAdsManagerFlow(t *testing.T) {
 	var d api.Dashboard
 	call(t, srv, "GET", "/v1/dashboard?product=mp3", true, nil, &d)
 	if d.BusinessPaise != net+14334 || d.ProSales != 3 || d.Downloads != 3 || d.WeeklyDownloads[3].Ads != 2 || d.WeeklyDownloads[3].Organic != 1 ||
-		d.Revenue30d[29] != net+14334 || d.Ads.SpendPaise != 600000 || len(d.Widgets) != 2 {
+		d.Revenue30d[29] != net+14334 || d.Ads.SpendPaise != 600000 || len(d.Widgets) != 3 {
 		t.Fatalf("dashboard = %+v", d)
 	}
 	if got.Attribution != "estimate" {
