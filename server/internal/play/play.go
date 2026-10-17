@@ -29,6 +29,8 @@ type Client struct {
 	key      *rsa.PrivateKey
 	tokenURL string
 	Base     string
+	Report   string // https://playdeveloperreporting.googleapis.com/v1beta1
+	Storage  string // https://storage.googleapis.com
 	h        *http.Client
 
 	mu      sync.Mutex
@@ -62,8 +64,13 @@ func New(serviceAccountJSON string) (*Client, error) {
 		sa.TokenURI = "https://oauth2.googleapis.com/token"
 	}
 	return &Client{email: sa.Email, key: rk, tokenURL: sa.TokenURI,
-		Base: "https://androidpublisher.googleapis.com/androidpublisher/v3", h: &http.Client{Timeout: 30 * time.Second}}, nil
+		Base: "https://androidpublisher.googleapis.com/androidpublisher/v3", Report: "https://playdeveloperreporting.googleapis.com/v1beta1",
+		Storage: "https://storage.googleapis.com", h: &http.Client{Timeout: 30 * time.Second}}, nil
 }
+
+// One token covers reviews and purchases, vitals, and the bulk-report bucket.
+const scopes = "https://www.googleapis.com/auth/androidpublisher https://www.googleapis.com/auth/playdeveloperreporting " +
+	"https://www.googleapis.com/auth/devstorage.read_only"
 
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
@@ -75,7 +82,7 @@ func (c *Client) accessToken(ctx context.Context) (string, error) {
 	}
 	now := time.Now()
 	head, _ := json.Marshal(map[string]string{"alg": "RS256", "typ": "JWT"})
-	claims, _ := json.Marshal(map[string]any{"iss": c.email, "scope": "https://www.googleapis.com/auth/androidpublisher",
+	claims, _ := json.Marshal(map[string]any{"iss": c.email, "scope": scopes,
 		"aud": c.tokenURL, "iat": now.Unix(), "exp": now.Add(time.Hour).Unix()})
 	unsigned := b64(head) + "." + b64(claims)
 	sum := sha256.Sum256([]byte(unsigned))

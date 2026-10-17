@@ -4,6 +4,7 @@ package secret
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -15,8 +16,8 @@ import (
 	"time"
 )
 
-// Box holds the 32-byte key from TOKEN_KEY.
-type Box struct{ key []byte }
+// Box holds two subkeys derived from TOKEN_KEY: one for encryption, one for signing OAuth state.
+type Box struct{ key, macKey []byte }
 
 // New decodes a base64 32-byte key (generate one with `openssl rand -base64 32`).
 func New(b64 string) (*Box, error) {
@@ -24,7 +25,15 @@ func New(b64 string) (*Box, error) {
 	if err != nil || len(k) != 32 {
 		return nil, errors.New("TOKEN_KEY must be 32 random bytes, base64 encoded")
 	}
-	return &Box{key: k}, nil
+	enc, err := hkdf.Key(sha256.New, k, nil, "ampli-owner token encryption", 32)
+	if err != nil {
+		return nil, err
+	}
+	mac, err := hkdf.Key(sha256.New, k, nil, "ampli-owner oauth state", 32)
+	if err != nil {
+		return nil, err
+	}
+	return &Box{key: enc, macKey: mac}, nil
 }
 
 func (b *Box) aead() cipher.AEAD {
@@ -53,7 +62,7 @@ func (b *Box) Open(sealed []byte) (string, error) {
 }
 
 func (b *Box) mac(msg string) string {
-	m := hmac.New(sha256.New, b.key)
+	m := hmac.New(sha256.New, b.macKey)
 	m.Write([]byte("state:" + msg))
 	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
@@ -79,4 +88,11 @@ func (b *Box) CheckState(state string, now time.Time) (string, error) {
 		return "", fmt.Errorf("state expired")
 	}
 	return parts[0], nil
+}
+
+// HashKey returns a short keyed hash (for IP prefixes and purchase tokens) so raw values are never stored.
+func (b *Box) HashKey(purpose, v string) string {
+	m := hmac.New(sha256.New, b.macKey)
+	m.Write([]byte(purpose + ":" + v))
+	return base64.RawURLEncoding.EncodeToString(m.Sum(nil)[:18])
 }

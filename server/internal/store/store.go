@@ -39,6 +39,16 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if _, err := s.DB.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
 		return err
 	}
+	// Two cold starts can race here; a session lock makes the second wait for the first.
+	conn, err := s.DB.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(7420017)`); err != nil {
+		return err
+	}
+	defer conn.Exec(context.Background(), `SELECT pg_advisory_unlock(7420017)`) //nolint:errcheck
 	names, err := fs.Glob(migrations.FS, "*.sql")
 	if err != nil {
 		return err
@@ -46,7 +56,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 	sort.Strings(names)
 	for _, name := range names {
 		var done bool
-		if err := s.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)`, name).Scan(&done); err != nil {
+		if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)`, name).Scan(&done); err != nil {
 			return err
 		}
 		if done {
@@ -56,7 +66,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		err = pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
+		err = pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
 			if _, err := tx.Exec(ctx, string(sql)); err != nil {
 				return err
 			}

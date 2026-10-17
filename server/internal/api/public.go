@@ -34,8 +34,6 @@ func (rp Report) validate() string {
 		return "title must be 3 to 120 characters"
 	case !lenBetween(rp.Body, 0, 4000):
 		return "body must be at most 4000 characters"
-	case !lenBetween(rp.InstallID, 8, 64):
-		return "install_id is required"
 	case len(rp.Contact) > 200, len(rp.AppVersion) > 64, len(rp.Device) > 120, len(rp.OS) > 64, len(rp.Locale) > 16, len(rp.OrderID) > 64:
 		return "a field is too long"
 	}
@@ -51,6 +49,10 @@ func (s *Server) createReport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
+	if !s.guard(w, r, rp.InstallID, false) {
+		return
+	}
+	rp.InstallID = strings.ToLower(rp.InstallID)
 	n, err := s.Store.ReportsSince(r.Context(), rp.InstallID, s.Now().Add(-24*time.Hour))
 	if err != nil {
 		fail(w, r, err)
@@ -62,7 +64,10 @@ func (s *Server) createReport(w http.ResponseWriter, r *http.Request) {
 	}
 	priority := int16(2)
 	if rp.Kind == "support" && rp.Pro {
-		priority = 1 // paying users asking for help go to the top of the inbox
+		// Paying users asking for help go to the top of the inbox, once Google confirmed their purchase.
+		if pro, err := s.Store.HasPro(r.Context(), rp.Product, rp.InstallID); err == nil && pro {
+			priority = 1
+		}
 	}
 	t, err := s.Store.CreateTicket(r.Context(), store.Ticket{
 		ProductID: rp.Product, Kind: rp.Kind, Title: strings.TrimSpace(rp.Title), Body: strings.TrimSpace(rp.Body),
@@ -87,9 +92,8 @@ type publicTicket struct {
 
 // myReports lists one install's own tickets with the conversation, so the app can show "My requests".
 func (s *Server) myReports(w http.ResponseWriter, r *http.Request) {
-	install := r.URL.Query().Get("install_id")
-	if !lenBetween(install, 8, 64) {
-		writeErr(w, http.StatusBadRequest, "install_id is required")
+	install := strings.ToLower(r.URL.Query().Get("install_id"))
+	if !s.guard(w, r, install, false) {
 		return
 	}
 	ts, err := s.Store.ListTickets(r.Context(), store.TicketFilter{InstallID: install, Limit: 50})
@@ -129,7 +133,8 @@ func (s *Server) publicFeatures(w http.ResponseWriter, r *http.Request) {
 	}
 	out := []publicFeature{}
 	for _, t := range ts {
-		if t.Status == "closed" {
+		// Only requests the owner has accepted are shown to other users (user-written text is moderated first).
+		if !oneOf(t.Status, "planned", "in_progress", "fixed") {
 			continue
 		}
 		out = append(out, publicFeature{ID: t.ID, Title: t.Title, Status: t.Status, Votes: t.Votes})
@@ -148,11 +153,10 @@ func (s *Server) vote(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if !lenBetween(body.InstallID, 8, 64) {
-		writeErr(w, http.StatusBadRequest, "install_id is required")
+	if !s.guard(w, r, body.InstallID, true) {
 		return
 	}
-	votes, err := s.Store.Vote(r.Context(), id, body.InstallID)
+	votes, err := s.Store.Vote(r.Context(), id, strings.ToLower(body.InstallID))
 	if err != nil {
 		fail(w, r, err)
 		return

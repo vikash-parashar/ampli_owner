@@ -19,14 +19,14 @@ import (
 type Meta struct {
 	AppID, AppSecret, PageID string
 	Promoted                 map[string]string
-	Graph                    string // https://graph.facebook.com/v23.0
-	Dialog                   string // https://www.facebook.com/v23.0/dialog/oauth
+	Graph                    string // https://graph.facebook.com/v26.0
+	Dialog                   string // https://www.facebook.com/v26.0/dialog/oauth
 	h                        httpc
 }
 
 func NewMeta(appID, secret, pageID, promoted, version string) *Meta {
 	if version == "" {
-		version = "v23.0"
+		version = "v26.0"
 	}
 	return &Meta{AppID: appID, AppSecret: secret, PageID: pageID, Promoted: productMap(promoted),
 		Graph: "https://graph.facebook.com/" + version, Dialog: "https://www.facebook.com/" + version + "/dialog/oauth", h: newHTTP()}
@@ -181,7 +181,8 @@ func (m *Meta) Create(ctx context.Context, t Token, a Account, s Spec) (Ref, err
 		ID string `json:"id"`
 	}
 	err := m.post(ctx, t, a.ExternalID+"/campaigns", url.Values{"name": {s.Name}, "objective": {"OUTCOME_APP_PROMOTION"},
-		"status": {status}, "special_ad_categories": {"[]"}, "buying_type": {"AUCTION"}}, &id)
+		"status": {status}, "special_ad_categories": {"[]"}, "buying_type": {"AUCTION"},
+		"is_adset_budget_sharing_enabled": {"false"}}, &id)
 	if err != nil {
 		return ref, err
 	}

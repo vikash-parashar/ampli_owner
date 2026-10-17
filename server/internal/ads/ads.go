@@ -100,12 +100,16 @@ type Country struct {
 }
 
 var Countries = map[string]Country{
-	"IN": {"IN", "India", 2356, 1269750, 600},
-	"US": {"US", "USA", 2840, 6252001, 4000},
-	"GB": {"GB", "UK", 2826, 2635167, 3500},
-	"AE": {"AE", "UAE", 2784, 290557, 2200},
-	"CA": {"CA", "Canada", 2124, 6251999, 3800},
+	"IN": {"IN", "India", 2356, 1269750, 2000},
+	"US": {"US", "USA", 2840, 6252001, 15000},
+	"GB": {"GB", "UK", 2826, 2635167, 12000},
+	"AE": {"AE", "UAE", 2784, 290557, 8000},
+	"CA": {"CA", "Canada", 2124, 6251999, 13000},
 }
+
+// MinDailyBudgetPaise is the smallest daily budget worth running per platform
+// (TikTok's ad group minimum is about USD 20; Google App campaigns need room to learn).
+var MinDailyBudgetPaise = map[string]int64{"meta": 10000, "tiktok": 170000, "google": 100000}
 
 // ---- verdict ----
 

@@ -110,10 +110,19 @@ type Campaign struct {
 	UTMCampaign        string      `json:"utm_campaign"`
 	CreativeURL        string      `json:"creative_url"`
 	LastError          string      `json:"last_error"`
+	AutoStop           AutoStop    `json:"auto_stop"`
 	CreatedAt          time.Time   `json:"created_at"`
 	ExternalID         string      `json:"-"`
 	ExternalSetID      string      `json:"-"`
 	manualRevenue      int64
+}
+
+// AutoStop pauses a live campaign once ROAS stays below MinROAS after MinDays of spend and MinSpendPaise.
+type AutoStop struct {
+	Enabled       bool    `json:"enabled"`
+	MinROAS       float64 `json:"min_roas"`
+	MinDays       int     `json:"min_days"`
+	MinSpendPaise int64   `json:"min_spend_paise"`
 }
 
 // attribution assigns each ad install to one campaign: by our own utm_campaign link first,
@@ -127,7 +136,8 @@ WITH att AS (
   FROM installs i WHERE i.ad_platform <> '' OR i.utm_campaign LIKE 'ampli-c%'
 ), per AS (
   SELECT att.campaign_id, count(*) AS installs, COALESCE(sum(p.amt), 0)::bigint AS revenue
-  FROM att LEFT JOIN (SELECT product_id, install_id, sum(amount_paise) AS amt FROM purchases GROUP BY 1, 2) p
+  FROM att LEFT JOIN (SELECT product_id, install_id, sum(net_paise) AS amt FROM purchases
+    WHERE verified AND refunded_at IS NULL GROUP BY 1, 2) p
     ON p.product_id = att.product_id AND p.install_id = att.install_id
   WHERE att.campaign_id IS NOT NULL GROUP BY 1
 )`
@@ -135,7 +145,7 @@ WITH att AS (
 const campaignSelect = attribution + `
 SELECT c.id, c.platform, COALESCE(c.product_id, ''), c.name, c.status, c.countries, c.daily_budget_paise, c.spend_paise,
   c.impressions, c.clicks, c.installs, c.revenue_paise, c.ad_account_id, COALESCE(c.utm_campaign, ''), c.creative_url, c.last_error,
-  c.created_at, c.external_id, c.external_set_id,
+  c.created_at, c.external_id, c.external_set_id, c.auto_stop, c.auto_min_roas, c.auto_min_days, c.auto_min_spend,
   (SELECT count(*) FROM campaign_days d WHERE d.campaign_id = c.id AND d.spend_paise > 0)::int,
   COALESCE(per.installs, 0), COALESCE(per.revenue, 0)
 FROM campaigns c LEFT JOIN per ON per.campaign_id = c.id`
@@ -145,7 +155,8 @@ func scanCampaign(r pgx.Row) (Campaign, error) {
 	var attrRev int64
 	err := r.Scan(&c.ID, &c.Platform, &c.ProductID, &c.Name, &c.Status, &c.Countries, &c.DailyBudgetPaise, &c.SpendPaise,
 		&c.Impressions, &c.Clicks, &c.Installs, &c.manualRevenue, &c.AdAccountID, &c.UTMCampaign, &c.CreativeURL, &c.LastError,
-		&c.CreatedAt, &c.ExternalID, &c.ExternalSetID, &c.Days, &c.AttributedInstalls, &attrRev)
+		&c.CreatedAt, &c.ExternalID, &c.ExternalSetID, &c.AutoStop.Enabled, &c.AutoStop.MinROAS, &c.AutoStop.MinDays,
+		&c.AutoStop.MinSpendPaise, &c.Days, &c.AttributedInstalls, &attrRev)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return c, ErrNotFound
 	}
@@ -278,21 +289,74 @@ func (s *Store) SaveInstall(ctx context.Context, in Install) (bool, error) {
 	return err == nil && tag.RowsAffected() == 1, err
 }
 
+// Purchase is a purchase Google Play confirmed. AmountPaise is the list price, NetPaise what reaches the bank.
 type Purchase struct {
-	ProductID   string `json:"product"`
-	InstallID   string `json:"install_id"`
-	Kind        string `json:"kind"`
-	SKU         string `json:"sku"`
-	AmountPaise int64  `json:"amount_paise"`
-	Currency    string `json:"currency"`
-	OrderID     string `json:"order_id"`
+	ProductID   string
+	InstallID   string
+	Kind        string
+	SKU         string
+	AmountPaise int64
+	NetPaise    int64
+	Currency    string
+	OrderID     string
+	TokenHash   string
+	Region      string
+	Verified    bool
 }
 
+// SavePurchase stores a purchase once (by order id and by token).
 func (s *Store) SavePurchase(ctx context.Context, p Purchase) (bool, error) {
-	tag, err := s.DB.Exec(ctx, `INSERT INTO purchases (product_id, install_id, kind, sku, amount_paise, currency, order_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (order_id) DO NOTHING`,
-		p.ProductID, p.InstallID, p.Kind, p.SKU, p.AmountPaise, p.Currency, p.OrderID)
+	tag, err := s.DB.Exec(ctx, `INSERT INTO purchases (product_id, install_id, kind, sku, amount_paise, net_paise, currency, order_id,
+		token_hash, region, verified) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING`,
+		p.ProductID, p.InstallID, p.Kind, p.SKU, p.AmountPaise, p.NetPaise, p.Currency, p.OrderID, p.TokenHash, p.Region, p.Verified)
 	return err == nil && tag.RowsAffected() == 1, err
+}
+
+// HasPro reports whether Google confirmed a Pro purchase for this install.
+func (s *Store) HasPro(ctx context.Context, product, installID string) (bool, error) {
+	var ok bool
+	err := s.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM purchases WHERE product_id=$1 AND install_id=$2 AND kind='pro'
+		AND verified AND refunded_at IS NULL)`, product, installID).Scan(&ok)
+	return ok, err
+}
+
+// MarkRefunded flags voided orders so they drop out of revenue.
+func (s *Store) MarkRefunded(ctx context.Context, orderID string, at time.Time) error {
+	_, err := s.DB.Exec(ctx, `UPDATE purchases SET refunded_at=$2 WHERE order_id=$1 AND refunded_at IS NULL`, orderID, at)
+	return err
+}
+
+type SKU struct {
+	ProductID  string `json:"product"`
+	SKU        string `json:"sku"`
+	Kind       string `json:"kind"`
+	PricePaise int64  `json:"price_paise"`
+}
+
+func (s *Store) SKU(ctx context.Context, product, sku string) (SKU, error) {
+	k := SKU{ProductID: product, SKU: sku}
+	err := s.DB.QueryRow(ctx, `SELECT kind, price_paise FROM skus WHERE product_id=$1 AND sku=$2`, product, sku).Scan(&k.Kind, &k.PricePaise)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return k, ErrNotFound
+	}
+	return k, err
+}
+
+func (s *Store) SKUs(ctx context.Context) ([]SKU, error) {
+	rows, err := s.DB.Query(ctx, `SELECT product_id, sku, kind, price_paise FROM skus ORDER BY product_id, sku`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (SKU, error) {
+		var k SKU
+		return k, r.Scan(&k.ProductID, &k.SKU, &k.Kind, &k.PricePaise)
+	})
+}
+
+func (s *Store) SaveSKU(ctx context.Context, k SKU) error {
+	_, err := s.DB.Exec(ctx, `INSERT INTO skus (product_id, sku, kind, price_paise) VALUES ($1,$2,$3,$4)
+		ON CONFLICT (product_id, sku) DO UPDATE SET kind=EXCLUDED.kind, price_paise=EXCLUDED.price_paise`, k.ProductID, k.SKU, k.Kind, k.PricePaise)
+	return err
 }
 
 func (s *Store) AddEvents(ctx context.Context, product string, day time.Time, names []string) error {
@@ -305,6 +369,49 @@ func (s *Store) AddEvents(ctx context.Context, product string, day time.Time, na
 		}
 		return nil
 	})
+}
+
+// IPHit counts one public call from a network prefix today and reports whether it is within limit.
+func (s *Store) IPHit(ctx context.Context, key string, day time.Time, limit int) (bool, error) {
+	var n int
+	err := s.DB.QueryRow(ctx, `INSERT INTO ip_hits (ip_key, day, hits) VALUES ($1,$2,1)
+		ON CONFLICT (ip_key, day) DO UPDATE SET hits = ip_hits.hits + 1 RETURNING hits`, key, day).Scan(&n)
+	return n <= limit, err
+}
+
+// Cleanup drops rate-limit rows older than two days and raw referrers older than 90 days.
+func (s *Store) Cleanup(ctx context.Context, today time.Time) error {
+	if _, err := s.DB.Exec(ctx, `DELETE FROM public_hits WHERE day < $1::date - 2`, today); err != nil {
+		return err
+	}
+	if _, err := s.DB.Exec(ctx, `DELETE FROM ip_hits WHERE day < $1::date - 2`, today); err != nil {
+		return err
+	}
+	_, err := s.DB.Exec(ctx, `UPDATE installs SET referrer='', utm_content='' WHERE referrer <> '' AND created_at < $1::date - 90`, today)
+	return err
+}
+
+// EraseInstall removes what one install sent (a user's deletion request). Purchases keep their money
+// for the accounts but lose the link to the install.
+func (s *Store) EraseInstall(ctx context.Context, installID string) (int64, error) {
+	var n int64
+	err := pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
+		for _, q := range []string{
+			`DELETE FROM installs WHERE install_id=$1`,
+			`DELETE FROM feature_votes WHERE install_id=$1`,
+			`DELETE FROM public_hits WHERE install_id=$1`,
+			`DELETE FROM tickets WHERE install_id=$1`,
+			`UPDATE purchases SET install_id='erased' WHERE install_id=$1`,
+		} {
+			tag, err := tx.Exec(ctx, q, installID)
+			if err != nil {
+				return err
+			}
+			n += tag.RowsAffected()
+		}
+		return nil
+	})
+	return n, err
 }
 
 // Hit counts one public call for an install today and reports whether it is within limit.

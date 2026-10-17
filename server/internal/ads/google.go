@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"strings"
 	"time"
@@ -14,17 +15,17 @@ import (
 //	GOOGLE_ADS_CLIENT_ID, GOOGLE_ADS_CLIENT_SECRET  OAuth client (Web application) from Google Cloud
 //	GOOGLE_ADS_DEVELOPER_TOKEN                      from the Google Ads manager account's API Center
 //	GOOGLE_ADS_LOGIN_CUSTOMER_ID                    optional manager account id (digits only)
-//	GOOGLE_ADS_API_VERSION                          optional, default v21
+//	GOOGLE_ADS_API_VERSION                          optional, default v26
 type Google struct {
 	ClientID, Secret, DevToken, LoginCustomer string
-	Base                                      string // https://googleads.googleapis.com/v21
+	Base                                      string // https://googleads.googleapis.com/v26
 	AuthBase, TokenURL                        string
 	h                                         httpc
 }
 
 func NewGoogle(clientID, secret, devToken, loginCustomer, version string) *Google {
 	if version == "" {
-		version = "v21"
+		version = "v26"
 	}
 	return &Google{ClientID: clientID, Secret: secret, DevToken: devToken, LoginCustomer: strings.ReplaceAll(loginCustomer, "-", ""),
 		Base: "https://googleads.googleapis.com/" + version, AuthBase: "https://accounts.google.com/o/oauth2/v2/auth",
@@ -145,16 +146,27 @@ func num(v any) float64 {
 
 func (g *Google) Insights(ctx context.Context, t Token, a Account, since, until string) ([]DayInsight, error) {
 	rows, err := g.search(ctx, t, a.ExternalID, fmt.Sprintf(`SELECT campaign.id, segments.date, metrics.cost_micros,
-		metrics.impressions, metrics.clicks, metrics.conversions FROM campaign WHERE segments.date BETWEEN '%s' AND '%s'`, since, until))
+		metrics.impressions, metrics.clicks FROM campaign WHERE segments.date BETWEEN '%s' AND '%s'`, since, until))
 	if err != nil {
 		return nil, err
+	}
+	// Installs: only conversions in the Download category (in-app events are counted separately by Google).
+	conv, err := g.search(ctx, t, a.ExternalID, fmt.Sprintf(`SELECT campaign.id, segments.date, metrics.all_conversions
+		FROM campaign WHERE segments.date BETWEEN '%s' AND '%s' AND segments.conversion_action_category = 'DOWNLOAD'`, since, until))
+	if err != nil {
+		return nil, err
+	}
+	installs := map[string]int64{}
+	for _, r := range conv {
+		installs[str(r["campaign"]["id"])+"|"+str(r["segments"]["date"])] += int64(num(r["metrics"]["allConversions"]) + 0.5)
 	}
 	out := make([]DayInsight, 0, len(rows))
 	for _, r := range rows {
 		m := r["metrics"]
-		out = append(out, DayInsight{CampaignID: str(r["campaign"]["id"]), Day: str(r["segments"]["date"]),
+		id, day := str(r["campaign"]["id"]), str(r["segments"]["date"])
+		out = append(out, DayInsight{CampaignID: id, Day: day,
 			SpendPaise: ToPaise(num(m["costMicros"])/1e6, a.Currency), Impressions: int64(num(m["impressions"])),
-			Clicks: int64(num(m["clicks"])), Installs: int64(num(m["conversions"]) + 0.5)})
+			Clicks: int64(num(m["clicks"])), Installs: installs[id+"|"+day]})
 	}
 	return out, nil
 }
@@ -179,7 +191,11 @@ func (g *Google) mutate(ctx context.Context, t Token, customer, resource string,
 	return names, nil
 }
 
-func micros(paise int64, cur string) string { return fmt.Sprint(int64(FromPaise(paise, cur) * 1e6)) }
+// micros converts paise to account-currency micros, rounded to the 10,000-micro unit Google requires.
+func micros(paise int64, cur string) string {
+	m := int64(math.Round(FromPaise(paise, cur)*100)) * 10000
+	return fmt.Sprint(m)
+}
 
 func (g *Google) Create(ctx context.Context, t Token, a Account, s Spec) (Ref, error) {
 	var ref Ref

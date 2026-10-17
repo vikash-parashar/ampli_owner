@@ -101,3 +101,47 @@ also posts to Google Play when the Play service account is set), `POST /v1/revie
   after every completed purchase. `order_id` is unique, so retries are safe.
 - `POST /v1/public/events` `{"product","install_id","events":["feature_eq","cmd_navigate"]}` at most once per
   app start, counters only, no personal data. Names match `^[a-z0-9_]{1,40}$`, up to 20 per call.
+
+---
+
+# v2.1 additions (2026-10-17, after review)
+
+## Alerts
+`GET /v1/alerts` → list, most severe first:
+```json
+[{"id": "vitals-crash-mp3", "severity": "high|medium|low", "product": "mp3", "title": "Crash rate 1.3% (Play limit 1.09%)",
+  "detail": "Play shows the app less above this. Check the latest crashes.", "action": "open_ads|open_reviews|open_inbox|open_settings|"}]
+```
+Covers: vitals near or over Play's bad-behaviour limits, new unreplied 1-2★ reviews, rating falling week on week,
+live campaigns with a Stop verdict, campaigns in error, expired ad accounts or AdMob, tickets waiting on the owner.
+
+## Ads changes
+- `GET /v1/ads/platforms`: each platform also has `"min_daily_budget_paise"` (meta 10000, tiktok 170000, google 100000).
+- Campaign JSON adds `"auto_stop": {"enabled": false, "min_roas": 0.5, "min_days": 7, "min_spend_paise": 200000}` and
+  `"attribution": "link|estimate|none"` (estimate = installs matched by platform and time, not by our link).
+- `POST /v1/ads/campaigns/{id}/autostop` with the auto_stop object → campaign. When enabled, every sync pauses the
+  campaign on the platform once ROAS < min_roas after min_days days of spend and at least min_spend_paise spent.
+- `GET /v1/ads/campaigns/{id}/log` → `[{"id","campaign_id","actor":"owner|rule|sync","action","detail","created_at"}]`.
+- `DELETE /v1/ads/campaigns/{id}` → 204 (pauses it on the platform first).
+- `POST /v1/ads/sync?force=1` → `{"synced": 1, "errors": ["meta Ampli Studio: ..."]}`; show the first error when present.
+- Money everywhere is **net** (after Google's 15% fee and 18% GST) from **verified** purchases only.
+
+## Integrations (AdMob, Play)
+- `GET /v1/integrations` → `{"admob": {"configured": true, "connected": false, "account": "", "last_sync_at": null, "last_error": ""},
+  "play": {"configured": true, "last_sync_at": null, "last_error": ""}}`
+- `POST /v1/integrations/admob/connect` → `{"auth_url": "..."}` (open in the browser, like ad accounts).
+- `POST /v1/integrations/sync` → `{"admob_days": 30, "vitals": 3, "reviews": 12, "play_days": 0, "errors": []}`
+  (AdMob earnings → ad revenue, Play vitals, Play reviews, Play installs/ratings reports).
+
+## Dashboard
+Adds `"vitals": {"day": "2026-10-15", "crash_rate": 0.0042, "anr_rate": 0.0011}` (null when unknown; Play's limits are
+0.0109 and 0.0047) and `"active_users"` is the latest day's count (label it "Active users", not 30 days).
+
+## Public purchases (v1.1: verified with Google Play)
+`POST /v1/public/purchases`
+```json
+{"product": "mp3", "install_id": "uuid v4", "sku": "ampli_pro", "purchase_token": "from Play Billing",
+ "kind": "pro|tip|subscription|other"}
+```
+The server checks the token with Google Play, takes the price from its own SKU table, and stores net rupees.
+`install_id` must be a UUID v4 on every public endpoint. Unknown event names are rejected.

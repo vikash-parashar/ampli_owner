@@ -72,6 +72,7 @@ func TestAdsManagerFlow(t *testing.T) {
 	srv, st := newServerWith(t, func(s *api.Server) {
 		s.Box, s.PublicURL = box, "https://owner.test"
 		s.Platforms = map[string]ads.Platform{"meta": fake}
+		s.Play = fakePlay(t)
 	})
 
 	// Connect: the app gets a sign-in link, the platform calls back with a code.
@@ -143,25 +144,53 @@ func TestAdsManagerFlow(t *testing.T) {
 
 	// Installs from the ad, and one purchase each from two of them: ₹199 × 2 = 0.07x ROAS.
 	for i, ref := range []string{"utm_source=apps.facebook.com&utm_campaign=fb4a", "utm_source=ampli&utm_campaign=ampli-c1", "utm_source=google-play&utm_medium=organic"} {
-		in := map[string]string{"product": "mp3", "install_id": fmt.Sprintf("install-%08d", i), "referrer": ref}
+		in := map[string]string{"product": "mp3", "install_id": fmt.Sprintf("00000000-0000-4000-8000-%012d", i), "referrer": ref}
 		if code := call(t, srv, "POST", "/v1/public/installs", false, in, nil); code != 200 {
 			t.Fatalf("install: %d", code)
 		}
 	}
 	for i := 0; i < 2; i++ {
-		p := map[string]any{"product": "mp3", "install_id": fmt.Sprintf("install-%08d", i), "kind": "pro", "sku": "ampli_pro",
-			"amount_paise": 19900, "order_id": fmt.Sprintf("GPA.0000-%d", i)}
-		call(t, srv, "POST", "/v1/public/purchases", false, p, nil)
-		call(t, srv, "POST", "/v1/public/purchases", false, p, nil) // retry is ignored
+		p := map[string]any{"product": "mp3", "install_id": fmt.Sprintf("00000000-0000-4000-8000-%012d", i), "kind": "pro",
+			"sku": "ampli_pro", "purchase_token": fmt.Sprintf("good-token-%d", i)}
+		var res struct{ Recorded, Verified bool }
+		code := call(t, srv, "POST", "/v1/public/purchases", false, p, &res)
+		if !res.Recorded || !res.Verified {
+			t.Fatalf("purchase %d: %d %+v", i, code, res)
+		}
+		call(t, srv, "POST", "/v1/public/purchases", false, p, &res) // retry is ignored
+		if res.Recorded {
+			t.Fatalf("retry recorded twice")
+		}
 	}
+	// A forged token is refused; a license tester's purchase is stored but is not money.
+	forged := map[string]any{"product": "mp3", "install_id": "00000000-0000-4000-8000-000000000002", "sku": "ampli_pro", "purchase_token": "forged-token-1"}
+	if code := call(t, srv, "POST", "/v1/public/purchases", false, forged, nil); code != 400 {
+		t.Fatalf("forged purchase: %d", code)
+	}
+	forged["purchase_token"] = "test-token-1"
+	if code := call(t, srv, "POST", "/v1/public/purchases", false, forged, nil); code != 200 {
+		t.Fatalf("tester purchase: %d", code)
+	}
+	forged["sku"] = "made_up"
+	if code := call(t, srv, "POST", "/v1/public/purchases", false, forged, nil); code != 400 {
+		t.Fatalf("unknown sku: %d", code)
+	}
+	if code := call(t, srv, "POST", "/v1/public/installs", false, map[string]string{"product": "mp3", "install_id": "not-a-uuid"}, nil); code != 400 {
+		t.Fatalf("bad install id: %d", code)
+	}
+	if code := call(t, srv, "POST", "/v1/public/events", false, map[string]any{"product": "mp3",
+		"install_id": "00000000-0000-4000-8000-000000000001", "events": []string{"made_up_event"}}, nil); code != 400 {
+		t.Fatalf("unknown event: %d", code)
+	}
+	const net = 2 * 14334 // ₹199 minus 18% GST minus Google's 15%, twice
 	var list struct {
 		Summary   api.AdsSummary   `json:"summary"`
 		Campaigns []store.Campaign `json:"campaigns"`
 	}
 	call(t, srv, "GET", "/v1/ads/campaigns?product=mp3", true, nil, &list)
 	got := list.Campaigns[0]
-	if got.SpendPaise != 600000 || got.Installs != 120 || got.AttributedInstalls != 2 || got.RevenuePaise != 39800 ||
-		got.Days != 6 || got.Status != "live" || got.Verdict.Code != "stop" || list.Summary.ProfitPaise != 39800-600000 {
+	if got.SpendPaise != 600000 || got.Installs != 120 || got.AttributedInstalls != 2 || got.RevenuePaise != net ||
+		got.Days != 6 || got.Status != "live" || got.Verdict.Code != "stop" || list.Summary.ProfitPaise != net-600000 {
 		t.Fatalf("after sync = %+v summary %+v", got, list.Summary)
 	}
 
@@ -178,8 +207,8 @@ func TestAdsManagerFlow(t *testing.T) {
 	// The MP3 dashboard counts the purchases and ad installs.
 	var d api.Dashboard
 	call(t, srv, "GET", "/v1/dashboard?product=mp3", true, nil, &d)
-	if d.BusinessPaise != 39800 || d.ProSales != 2 || d.Downloads != 3 || d.WeeklyDownloads[3].Ads != 2 || d.WeeklyDownloads[3].Organic != 1 ||
-		d.Revenue30d[29] != 39800 || d.Ads.SpendPaise != 600000 || len(d.Widgets) != 2 {
+	if d.BusinessPaise != net || d.ProSales != 2 || d.Downloads != 3 || d.WeeklyDownloads[3].Ads != 2 || d.WeeklyDownloads[3].Organic != 1 ||
+		d.Revenue30d[29] != net || d.Ads.SpendPaise != 600000 || len(d.Widgets) != 2 {
 		t.Fatalf("dashboard = %+v", d)
 	}
 }
@@ -205,9 +234,9 @@ func TestDashboardAllAndReviews(t *testing.T) {
 			t.Fatalf("review: %d", code)
 		}
 	}
-	call(t, srv, "POST", "/v1/public/events", false, map[string]any{"product": "carhub", "install_id": "install-car00001",
+	call(t, srv, "POST", "/v1/public/events", false, map[string]any{"product": "carhub", "install_id": "ca000000-0000-4000-8000-000000000001",
 		"events": []string{"voice_bunty", "cmd_navigate", "voice_bunty"}}, nil)
-	call(t, srv, "POST", "/v1/public/events", false, map[string]any{"product": "carhub", "install_id": "install-car00002",
+	call(t, srv, "POST", "/v1/public/events", false, map[string]any{"product": "carhub", "install_id": "ca000000-0000-4000-8000-000000000002",
 		"events": []string{"voice_simran"}}, nil)
 
 	var all api.Dashboard

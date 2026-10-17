@@ -204,11 +204,11 @@ WITH ds AS (
   FROM daily_stats WHERE product_id = $1 GROUP BY day
 ), pu AS (
   SELECT (created_at AT TIME ZONE 'Asia/Kolkata')::date AS day,
-         COALESCE(sum(amount_paise) FILTER (WHERE kind IN ('pro','subscription')), 0) pro,
-         COALESCE(sum(amount_paise) FILTER (WHERE kind = 'tip'), 0) tips,
-         COALESCE(sum(amount_paise) FILTER (WHERE kind = 'other'), 0) other,
+         COALESCE(sum(net_paise) FILTER (WHERE kind IN ('pro','subscription')), 0) pro,
+         COALESCE(sum(net_paise) FILTER (WHERE kind = 'tip'), 0) tips,
+         COALESCE(sum(net_paise) FILTER (WHERE kind = 'other'), 0) other,
          count(*) FILTER (WHERE kind = 'pro') sales
-  FROM purchases WHERE product_id = $1 GROUP BY 1
+  FROM purchases WHERE product_id = $1 AND verified AND refunded_at IS NULL GROUP BY 1
 ), ins AS (
   SELECT (created_at AT TIME ZONE 'Asia/Kolkata')::date AS day, count(*) n,
          count(*) FILTER (WHERE ad_platform <> '' OR utm_campaign LIKE 'ampli-c%') ads

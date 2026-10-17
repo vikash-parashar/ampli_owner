@@ -42,7 +42,7 @@ func newServerWith(t *testing.T, configure func(*api.Server)) (*httptest.Server,
 	}
 	if _, err := st.DB.Exec(ctx, `TRUNCATE tickets, ticket_messages, feature_votes, features, checklist_items, todos,
 		builds, daily_stats, campaigns, guides, ad_accounts, campaign_days, installs, purchases, reviews, app_events,
-		public_hits RESTART IDENTITY CASCADE`); err != nil {
+		public_hits, ip_hits, campaign_log, vitals, integrations RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	as := &api.Server{Store: st, OwnerToken: token}
@@ -104,7 +104,7 @@ func TestOwnerEndpointsNeedToken(t *testing.T) {
 
 func TestReportFlow(t *testing.T) {
 	srv := newServer(t)
-	install := "install-aaaaaaaa"
+	install := "0a0a0a0a-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
 	var created struct {
 		ID  int64  `json:"id"`
@@ -123,13 +123,13 @@ func TestReportFlow(t *testing.T) {
 		t.Fatalf("short title: got %d, want 400", code)
 	}
 
-	// Paid support lands at priority 1.
+	// A Pro claim without a verified Pro purchase is normal priority.
 	var detail struct {
 		Ticket   store.Ticket    `json:"ticket"`
 		Messages []store.Message `json:"messages"`
 	}
 	call(t, srv, "GET", "/v1/tickets/T-0001", true, nil, &detail)
-	if detail.Ticket.Priority != 1 || detail.Ticket.Source != "app" || detail.Ticket.Device != "OnePlus 13s" {
+	if detail.Ticket.Priority != 2 || detail.Ticket.Source != "app" || detail.Ticket.Device != "OnePlus 13s" {
 		t.Fatalf("ticket = %+v", detail.Ticket)
 	}
 
@@ -149,7 +149,7 @@ func TestReportFlow(t *testing.T) {
 
 	// Another install sees nothing.
 	var other []any
-	call(t, srv, "GET", "/v1/public/reports?install_id=install-bbbbbbbb", false, nil, &other)
+	call(t, srv, "GET", "/v1/public/reports?install_id=0b0b0b0b-bbbb-4bbb-8bbb-bbbbbbbbbbbb", false, nil, &other)
 	if len(other) != 0 {
 		t.Fatalf("other install saw %d tickets", len(other))
 	}
@@ -158,11 +158,11 @@ func TestReportFlow(t *testing.T) {
 func TestRateLimit(t *testing.T) {
 	srv := newServer(t)
 	for i := 0; i < api.ReportsPerDay; i++ {
-		if code := call(t, srv, "POST", "/v1/public/reports", false, report("bug", "install-cccccccc"), nil); code != 201 {
+		if code := call(t, srv, "POST", "/v1/public/reports", false, report("bug", "0c0c0c0c-cccc-4ccc-8ccc-cccccccccccc"), nil); code != 201 {
 			t.Fatalf("report %d: %d", i, code)
 		}
 	}
-	if code := call(t, srv, "POST", "/v1/public/reports", false, report("bug", "install-cccccccc"), nil); code != 429 {
+	if code := call(t, srv, "POST", "/v1/public/reports", false, report("bug", "0c0c0c0c-cccc-4ccc-8ccc-cccccccccccc"), nil); code != 429 {
 		t.Fatalf("over limit: got %d, want 429", code)
 	}
 }
@@ -170,24 +170,30 @@ func TestRateLimit(t *testing.T) {
 func TestVotesOncePerInstall(t *testing.T) {
 	srv := newServer(t)
 	var created struct{ ID int64 }
-	call(t, srv, "POST", "/v1/public/reports", false, report("feature", "install-dddddddd"), &created)
+	call(t, srv, "POST", "/v1/public/reports", false, report("feature", "0d0d0d0d-dddd-4ddd-8ddd-dddddddddddd"), &created)
 	var v struct{ Votes int }
 	path := fmt.Sprintf("/v1/public/features/%d/vote", created.ID)
-	call(t, srv, "POST", path, false, map[string]string{"install_id": "install-11111111"}, &v)
-	call(t, srv, "POST", path, false, map[string]string{"install_id": "install-11111111"}, &v)
-	call(t, srv, "POST", path, false, map[string]string{"install_id": "install-22222222"}, &v)
+	call(t, srv, "POST", path, false, map[string]string{"install_id": "11111111-1111-4111-8111-111111111111"}, &v)
+	call(t, srv, "POST", path, false, map[string]string{"install_id": "11111111-1111-4111-8111-111111111111"}, &v)
+	call(t, srv, "POST", path, false, map[string]string{"install_id": "22222222-2222-4222-8222-222222222222"}, &v)
 	if v.Votes != 2 {
 		t.Fatalf("votes = %d, want 2", v.Votes)
 	}
+	// Users only see requests the owner accepted.
 	var feats []struct{ Votes int }
+	call(t, srv, "GET", "/v1/public/features?product=mp3", false, nil, &feats)
+	if len(feats) != 0 {
+		t.Fatalf("unmoderated feature shown: %+v", feats)
+	}
+	call(t, srv, "PATCH", fmt.Sprintf("/v1/tickets/%d", created.ID), true, map[string]string{"status": "planned"}, nil)
 	call(t, srv, "GET", "/v1/public/features?product=mp3", false, nil, &feats)
 	if len(feats) != 1 || feats[0].Votes != 2 {
 		t.Fatalf("features = %+v", feats)
 	}
 	// Voting on a bug is refused.
 	var bug struct{ ID int64 }
-	call(t, srv, "POST", "/v1/public/reports", false, report("bug", "install-dddddddd"), &bug)
-	if code := call(t, srv, "POST", fmt.Sprintf("/v1/public/features/%d/vote", bug.ID), false, map[string]string{"install_id": "install-11111111"}, nil); code != 404 {
+	call(t, srv, "POST", "/v1/public/reports", false, report("bug", "0d0d0d0d-dddd-4ddd-8ddd-dddddddddddd"), &bug)
+	if code := call(t, srv, "POST", fmt.Sprintf("/v1/public/features/%d/vote", bug.ID), false, map[string]string{"install_id": "11111111-1111-4111-8111-111111111111"}, nil); code != 404 {
 		t.Fatalf("vote on bug: %d", code)
 	}
 }
@@ -215,7 +221,7 @@ func TestChecklistTodosStatsOverview(t *testing.T) {
 	if code := call(t, srv, "PUT", "/v1/stats", true, stats, nil); code != 200 {
 		t.Fatalf("stats: %d", code)
 	}
-	call(t, srv, "POST", "/v1/public/reports", false, report("bug", "install-eeeeeeee"), nil)
+	call(t, srv, "POST", "/v1/public/reports", false, report("bug", "0e0e0e0e-eeee-4eee-8eee-eeeeeeeeeeee"), nil)
 
 	var o store.Overview
 	call(t, srv, "GET", "/v1/overview", true, nil, &o)
