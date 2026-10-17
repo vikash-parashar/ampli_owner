@@ -238,6 +238,11 @@ internal object Sample {
         spend: Long, installs: Long, revenue: Long, days: Int,
     ): AdCampaign {
         val roas = if (spend == 0L) 0.0 else revenue.toDouble() / spend
+        // Like the server: from 14 days of spend the verdict uses the last 7 days.
+        val recent = days >= 14
+        val spend7 = if (recent) spend * 7 / days else 0L
+        val rev7 = if (recent) revenue * 6 / days else 0L
+        val roas7 = if (spend7 == 0L) 0.0 else rev7.toDouble() / spend7
         return AdCampaign(
             id = id, platform = platform, product = product, name = name, status = "live",
             countries = listOf(country),
@@ -245,7 +250,9 @@ internal object Sample {
             spendPaise = spend * 100, impressions = installs * 40, clicks = installs * 3, installs = installs,
             revenuePaise = revenue * 100, roas = roas,
             cpiPaise = if (installs == 0L) 0L else spend * 100 / installs,
-            days = days, verdict = verdict("live", days, roas),
+            days = days, verdict = verdict("live", days, if (recent) roas7 else roas),
+            spend7dPaise = spend7 * 100, revenue7dPaise = rev7 * 100, roas7d = roas7,
+            judgedOn = if (recent) "last_7_days" else "lifetime",
             adAccountId = when (platform) { "meta" -> 1L; "tiktok" -> 2L; else -> null },
             utmCampaign = "ampli-c$id",
             autoStop = AutoStop(enabled = id == 1L),
@@ -336,6 +343,6 @@ internal object Sample {
     )
 
     fun promo(): List<PromoPair> = listOf(
-        PromoPair("carhub", "mp3", "ampli_pro", imported = 50, available = 38, eligible = 14, claimed = 12, redeemed = 7),
+        PromoPair("carhub", "mp3", "ampli_pro", imported = 50, available = 38, eligible = 14, claimed = 12, redeemed = 7, refundedClaims = 1),
     )
 }

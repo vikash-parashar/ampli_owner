@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/vikash-parashar/ampli_owner/server/internal/store"
 )
@@ -165,6 +166,9 @@ func channelWidget(counts map[string]int64) Widget {
 
 // ---- cross-promo codes ----
 
+// PromoHold is how long after a Pro purchase its cross-promo code unlocks: Play's self-service refund window.
+const PromoHold = 48 * time.Hour
+
 var promoCode = regexp.MustCompile(`^[A-Z0-9]{6,40}$`)
 
 func (s *Server) importPromoCodes(w http.ResponseWriter, r *http.Request) {
@@ -237,13 +241,19 @@ func (s *Server) publicClaimPromo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, install := r.Context(), strings.ToLower(in.InstallID)
-	pro, err := s.Store.HasPro(ctx, in.Product, install)
+	bought, err := s.Store.ProBoughtAt(ctx, in.Product, install)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusForbidden, "only for Pro buyers whose purchase Google confirmed")
+		return
+	}
 	if err != nil {
 		fail(w, r, err)
 		return
 	}
-	if !pro {
-		writeErr(w, http.StatusForbidden, "only for Pro buyers whose purchase Google confirmed")
+	if ready := bought.Add(PromoHold); s.Now().Before(ready) {
+		// Play lets buyers refund themselves for 48 hours; a code handed out sooner is kept after a refund.
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "the gift unlocks 48 hours after buying Pro",
+			"available_at": ready.UTC().Format(time.RFC3339)})
 		return
 	}
 	c, err := s.Store.ClaimPromo(ctx, in.Product, install, s.Now())

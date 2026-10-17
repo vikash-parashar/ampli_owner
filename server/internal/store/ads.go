@@ -112,11 +112,21 @@ type Campaign struct {
 	LastError          string      `json:"last_error"`
 	AutoStop           AutoStop    `json:"auto_stop"`
 	Attribution        string      `json:"attribution"` // link, estimate or none
-	CreatedAt          time.Time   `json:"created_at"`
-	ExternalID         string      `json:"-"`
-	ExternalSetID      string      `json:"-"`
-	manualRevenue      int64
+	Spend7Paise        int64       `json:"spend_7d_paise"`
+	Revenue7Paise      int64       `json:"revenue_7d_paise"`
+	ROAS7              float64     `json:"roas_7d"`
+	// JudgedOn says which numbers the verdict and auto-stop used: "lifetime", or "last_7_days" once a campaign
+	// has 14+ days of spend, so one that started well and turned bad is still caught.
+	JudgedOn      string    `json:"judged_on"`
+	JudgeROAS     float64   `json:"judge_roas"`
+	CreatedAt     time.Time `json:"created_at"`
+	ExternalID    string    `json:"-"`
+	ExternalSetID string    `json:"-"`
+	manualRevenue int64
 }
+
+// RecentAfterDays is how many days of spend a campaign needs before it is judged on its last 7 days.
+const RecentAfterDays = 14
 
 // AutoStop pauses a live campaign once ROAS stays below MinROAS after MinDays of spend and MinSpendPaise.
 type AutoStop struct {
@@ -140,8 +150,10 @@ WITH att AS (
   FROM installs i LEFT JOIN campaigns l ON i.utm_campaign <> '' AND l.utm_campaign = i.utm_campaign
   WHERE i.ad_platform <> '' OR i.utm_campaign LIKE 'ampli-c%'
 ), per AS (
-  SELECT att.campaign_id, count(*) AS installs, count(att.link_id) AS by_link, COALESCE(sum(p.amt), 0)::bigint AS revenue
-  FROM att LEFT JOIN (SELECT product_id, install_id, sum(net_paise) AS amt FROM purchases
+  SELECT att.campaign_id, count(*) AS installs, count(att.link_id) AS by_link, COALESCE(sum(p.amt), 0)::bigint AS revenue,
+    COALESCE(sum(p.amt7), 0)::bigint AS revenue7
+  FROM att LEFT JOIN (SELECT product_id, install_id, sum(net_paise) AS amt,
+      sum(net_paise) FILTER (WHERE created_at >= now() - interval '7 days') AS amt7 FROM purchases
     WHERE verified AND refunded_at IS NULL GROUP BY 1, 2) p
     ON p.product_id = att.product_id AND p.install_id = att.install_id
   WHERE att.campaign_id IS NOT NULL GROUP BY 1
@@ -152,7 +164,8 @@ SELECT c.id, c.platform, COALESCE(c.product_id, ''), c.name, c.status, c.countri
   c.impressions, c.clicks, c.installs, c.revenue_paise, c.ad_account_id, COALESCE(c.utm_campaign, ''), c.creative_url, c.last_error,
   c.created_at, c.external_id, c.external_set_id, c.auto_stop, c.auto_min_roas, c.auto_min_days, c.auto_min_spend, c.auto_strike_at, c.auto_hold_until,
   (SELECT count(*) FROM campaign_days d WHERE d.campaign_id = c.id AND d.spend_paise > 0)::int,
-  COALESCE(per.installs, 0), COALESCE(per.by_link, 0), COALESCE(per.revenue, 0)
+  COALESCE(per.installs, 0), COALESCE(per.by_link, 0), COALESCE(per.revenue, 0), COALESCE(per.revenue7, 0),
+  (SELECT COALESCE(sum(d.spend_paise), 0) FROM campaign_days d WHERE d.campaign_id = c.id AND d.day >= current_date - 6)::bigint
 FROM campaigns c LEFT JOIN per ON per.campaign_id = c.id`
 
 func scanCampaign(r pgx.Row) (Campaign, error) {
@@ -161,7 +174,7 @@ func scanCampaign(r pgx.Row) (Campaign, error) {
 	err := r.Scan(&c.ID, &c.Platform, &c.ProductID, &c.Name, &c.Status, &c.Countries, &c.DailyBudgetPaise, &c.SpendPaise,
 		&c.Impressions, &c.Clicks, &c.Installs, &c.manualRevenue, &c.AdAccountID, &c.UTMCampaign, &c.CreativeURL, &c.LastError,
 		&c.CreatedAt, &c.ExternalID, &c.ExternalSetID, &c.AutoStop.Enabled, &c.AutoStop.MinROAS, &c.AutoStop.MinDays,
-		&c.AutoStop.MinSpendPaise, &c.AutoStop.PendingSince, &c.AutoStop.HoldUntil, &c.Days, &c.AttributedInstalls, &byLink, &attrRev)
+		&c.AutoStop.MinSpendPaise, &c.AutoStop.PendingSince, &c.AutoStop.HoldUntil, &c.Days, &c.AttributedInstalls, &byLink, &attrRev, &c.Revenue7Paise, &c.Spend7Paise)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return c, ErrNotFound
 	}
@@ -189,7 +202,18 @@ func scanCampaign(r pgx.Row) (Campaign, error) {
 	if c.Countries == nil {
 		c.Countries = []string{}
 	}
+	if c.Spend7Paise > 0 {
+		c.ROAS7 = float64(c.Revenue7Paise) / float64(c.Spend7Paise)
+	}
+	c.JudgedOn, c.JudgeROAS = "lifetime", c.ROAS
 	c.Verdict = ads.Judge(c.Status, c.SpendPaise, c.RevenuePaise, c.Days)
+	if c.Days >= RecentAfterDays && c.Spend7Paise > 0 {
+		c.JudgedOn, c.JudgeROAS = "last_7_days", c.ROAS7
+		c.Verdict = ads.Judge(c.Status, c.Spend7Paise, c.Revenue7Paise, c.Days)
+		if oneOfCode(c.Verdict.Code, "scale", "watch", "stop") {
+			c.Verdict.Reason = "Last 7 days: " + c.Verdict.Reason
+		}
+	}
 	if c.Attribution == "none" && c.SpendPaise > 0 && oneOfCode(c.Verdict.Code, "scale", "watch", "stop") {
 		c.Verdict = ads.Verdict{Code: "unknown", Label: "Can't judge yet",
 			Reason: "No installs are matched to this ad yet, so its earnings can't be measured. Check Google Play is connected."}

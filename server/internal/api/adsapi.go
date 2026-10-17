@@ -584,15 +584,15 @@ func (s *Server) applyAutoStop(ctx context.Context, accountID int64, p ads.Platf
 		if r.HoldUntil != nil && now.Before(*r.HoldUntil) {
 			continue
 		}
-		below := c.Attribution != "none" && c.Days >= r.MinDays && c.SpendPaise >= r.MinSpendPaise && c.ROAS < r.MinROAS
+		below := c.Attribution != "none" && c.Days >= r.MinDays && c.SpendPaise >= r.MinSpendPaise && c.JudgeROAS < r.MinROAS
 		if !below {
 			if r.PendingSince != nil {
 				_ = s.Store.SetAutoStrike(ctx, c.ID, nil)
-				_ = s.Store.LogCampaign(ctx, c.ID, "rule", "recovered", fmt.Sprintf("ROAS %.2fx, no longer below %.2fx", c.ROAS, r.MinROAS))
+				_ = s.Store.LogCampaign(ctx, c.ID, "rule", "recovered", fmt.Sprintf("ROAS %.2fx (%s), no longer below %.2fx", c.JudgeROAS, judgedOn(c), r.MinROAS))
 			}
 			continue
 		}
-		detail := fmt.Sprintf("ROAS %.2fx after %d days and %s spent (rule: below %.2fx)", c.ROAS, c.Days, rupees(c.SpendPaise), r.MinROAS)
+		detail := fmt.Sprintf("ROAS %.2fx (%s) after %d days and %s spent (rule: below %.2fx)", c.JudgeROAS, judgedOn(c), c.Days, rupees(c.SpendPaise), r.MinROAS)
 		if r.PendingSince == nil {
 			_ = s.Store.SetAutoStrike(ctx, c.ID, &now)
 			_ = s.Store.LogCampaign(ctx, c.ID, "rule", "will pause", detail+"; pauses at the next sync after 24 hours unless it improves")
@@ -625,4 +625,11 @@ func oauthPage(w http.ResponseWriter, code int, title, msg string) {
 <body style="font-family:system-ui;background:#F4F2FB;color:#17132B;display:grid;place-items:center;min-height:90vh;margin:0;padding:16px;text-align:center">
 <div><div style="font-size:44px">%s</div><h2>%s</h2><p style="color:#6B6585">%s</p></div></body>`,
 		map[bool]string{true: "✅", false: "⚠️"}[code == 200], html.EscapeString(title), html.EscapeString(msg))
+}
+
+func judgedOn(c store.Campaign) string {
+	if c.JudgedOn == "last_7_days" {
+		return "last 7 days"
+	}
+	return "lifetime"
 }

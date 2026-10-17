@@ -1,10 +1,12 @@
 package api_test
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vikash-parashar/ampli_owner/server/internal/api"
 	"github.com/vikash-parashar/ampli_owner/server/internal/store"
@@ -84,7 +86,8 @@ func waRef(u string) string {
 }
 
 func TestCrossPromoCodes(t *testing.T) {
-	srv, _ := newServerWith(t, func(s *api.Server) { s.Play = fakePlay(t) })
+	now := time.Now()
+	srv, st := newServerWith(t, func(s *api.Server) { s.Play = fakePlay(t); s.Now = func() time.Time { return now } })
 	buyer, other := "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
 	claim := func(id string, out any) int {
 		return call(t, srv, "POST", "/v1/public/promo/claim", false, map[string]string{"product": "carhub", "install_id": id}, out)
@@ -94,6 +97,15 @@ func TestCrossPromoCodes(t *testing.T) {
 	}
 	call(t, srv, "POST", "/v1/public/purchases", false, map[string]any{"product": "carhub", "install_id": buyer, "kind": "pro",
 		"sku": "ampli_drive_pro", "purchase_token": "good-car-1"}, nil)
+	var early struct {
+		AvailableAt time.Time `json:"available_at"`
+	}
+	if code := claim(buyer, &early); code != 409 || early.AvailableAt.Before(now.Add(47*time.Hour)) {
+		t.Fatalf("claim inside the refund window: %d %+v", code, early)
+	}
+	if _, err := st.DB.Exec(context.Background(), `UPDATE purchases SET created_at = now() - interval '49 hours'`); err != nil {
+		t.Fatal(err)
+	}
 	if code := claim(buyer, nil); code != 410 {
 		t.Fatalf("claim with no codes: %d", code)
 	}
@@ -134,6 +146,13 @@ func TestCrossPromoCodes(t *testing.T) {
 	}
 	if found {
 		t.Fatalf("low-codes alert with every buyer served: %+v", alerts)
+	}
+	if err := st.MarkRefunded(context.Background(), "GPA.good-car-1", now); err != nil {
+		t.Fatal(err)
+	}
+	call(t, srv, "GET", "/v1/promo", true, nil, &rep)
+	if rep[0].Refunded != 1 || rep[0].Eligible != 0 {
+		t.Fatalf("refunded claimer not reported: %+v", rep)
 	}
 	var erased struct {
 		Rows int64 `json:"erased_rows"`

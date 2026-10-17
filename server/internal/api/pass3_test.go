@@ -3,6 +3,7 @@ package api_test
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"testing"
 	"time"
 
@@ -68,5 +69,39 @@ func TestEarningsReportSetsExactNet(t *testing.T) {
 	call(t, srv, "POST", "/v1/integrations/sync", true, nil, &res)
 	if res.ExactNet != 0 {
 		t.Fatalf("second sync rewrote %d rows", res.ExactNet)
+	}
+}
+
+// A campaign that paid back early but has stopped earning is judged on its last 7 days once it has 14+ days.
+func TestVerdictUsesLastSevenDays(t *testing.T) {
+	srv, st := newServerWith(t, nil)
+	ctx := context.Background()
+	var id int64
+	if err := st.DB.QueryRow(ctx, `INSERT INTO campaigns (platform, product_id, name, status, daily_budget_paise, revenue_paise, utm_campaign)
+		VALUES ('google', 'mp3', 'Old winner', 'live', 10000, 400000, 'ampli-c900') RETURNING id`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.Exec(ctx, `INSERT INTO campaign_days (campaign_id, day, spend_paise)
+		SELECT $1, current_date - g, 10000 FROM generate_series(0, 19) g`, id); err != nil {
+		t.Fatal(err)
+	}
+	st.DB.Exec(ctx, `UPDATE campaigns SET spend_paise = 200000 WHERE id = $1`, id)
+	call(t, srv, "POST", "/v1/public/installs", false, map[string]string{"product": "mp3",
+		"install_id": "55555555-5555-4555-8555-555555555555", "referrer": "utm_source=google&utm_campaign=ampli-c900"}, nil)
+	var res struct {
+		Campaigns []struct {
+			ROAS     float64 `json:"roas"`
+			ROAS7    float64 `json:"roas_7d"`
+			JudgedOn string  `json:"judged_on"`
+			Verdict  struct{ Code string }
+		}
+	}
+	call(t, srv, "GET", "/v1/ads/campaigns?product=mp3", true, nil, &res)
+	if len(res.Campaigns) != 1 {
+		t.Fatalf("campaigns = %+v", res)
+	}
+	c := res.Campaigns[0]
+	if c.ROAS != 2 || c.ROAS7 != 0 || c.JudgedOn != "last_7_days" || c.Verdict.Code != "stop" {
+		t.Fatalf("campaign = %+v", c)
 	}
 }

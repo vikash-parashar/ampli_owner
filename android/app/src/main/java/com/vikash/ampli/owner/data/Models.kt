@@ -308,6 +308,11 @@ data class AdCampaign(
     @SerialName("auto_stop") val autoStop: AutoStop = AutoStop(),
     /** link = matched by our link, estimate = matched by platform and time, none = no installs matched yet. */
     val attribution: String = "none",
+    @SerialName("spend_7d_paise") val spend7dPaise: Long = 0,
+    @SerialName("revenue_7d_paise") val revenue7dPaise: Long = 0,
+    @SerialName("roas_7d") val roas7d: Double = 0.0,
+    /** lifetime, or last_7_days once the campaign has 14+ days of spend (verdict and auto-stop use that ROAS). */
+    @SerialName("judged_on") val judgedOn: String = "lifetime",
 )
 
 /** Pause a campaign automatically once ROAS < [minRoas] after [minDays] days and [minSpendPaise] spent. */
@@ -488,6 +493,8 @@ data class PromoPair(
     val eligible: Long = 0,
     val claimed: Long = 0,
     val redeemed: Long = 0,
+    /** People whose Pro was refunded after they got a code (they keep the code). */
+    @SerialName("refunded_claims") val refundedClaims: Long = 0,
 )
 
 @Serializable

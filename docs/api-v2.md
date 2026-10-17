@@ -193,3 +193,7 @@ An alert fires when 5 or fewer codes are left and buyers are still waiting. Hook
 - OAuth states carry a random nonce and are single use (`oauth_states_used`); a replayed callback gets "Link expired".
 - Meta calls send `appsecret_proof`. HTTP server read/write/idle timeouts. Go 1.27.2, modules updated.
 
+- Cross-promo claim answers **409** `{error, available_at}` until 48 h after the Pro purchase (Play's self-refund
+  window); `GET /v1/promo` adds `refunded_claims`.
+- Campaigns add `spend_7d_paise`, `revenue_7d_paise`, `roas_7d`, `judged_on` and `judge_roas`. With 14+ days of spend
+  the verdict, stop alerts and auto-stop use the last 7 days (`judged_on = last_7_days`), otherwise lifetime totals.

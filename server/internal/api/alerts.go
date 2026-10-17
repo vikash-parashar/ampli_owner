@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"github.com/vikash-parashar/ampli_owner/server/internal/store"
 	"net/http"
 	"sort"
 	"time"
@@ -82,11 +83,11 @@ func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
 		case c.Status == "live" && c.AutoStop.Enabled && c.AutoStop.PendingSince != nil:
 			add(Alert{ID: fmt.Sprintf("campaign-autostop-soon-%d", c.ID), Severity: "high", Product: c.ProductID, Action: "open_ads",
 				Title:  fmt.Sprintf("Auto-stop will pause %s at the next sync", c.Name),
-				Detail: fmt.Sprintf("ROAS %.2fx is under your %.2fx limit. Resume or lower the limit to keep it running.", c.ROAS, c.AutoStop.MinROAS)})
+				Detail: fmt.Sprintf("ROAS %.2fx (%s) is under your %.2fx limit. Resume or lower the limit to keep it running.", c.JudgeROAS, judgedOn(c), c.AutoStop.MinROAS)})
 		case c.Status == "live" && c.Verdict.Code == "stop":
 			add(Alert{ID: fmt.Sprintf("campaign-stop-%d", c.ID), Severity: "high", Product: c.ProductID, Action: "open_ads",
-				Title:  fmt.Sprintf("%s is losing money (%.2fx back)", c.Name, c.ROAS),
-				Detail: fmt.Sprintf("%s spent, %s back. Pause it or turn on auto-stop.", rupees(c.SpendPaise), rupees(c.RevenuePaise))})
+				Title:  fmt.Sprintf("%s is losing money (%.2fx back, %s)", c.Name, c.JudgeROAS, judgedOn(c)),
+				Detail: stopDetail(c)})
 		case c.Status == "live" && c.LastError != "":
 			add(Alert{ID: fmt.Sprintf("campaign-warn-%d", c.ID), Severity: "medium", Product: c.ProductID, Action: "open_ads",
 				Title: c.Name + " needs a look", Detail: c.LastError})
@@ -183,4 +184,12 @@ func plural(n int64) string {
 		return ""
 	}
 	return "s"
+}
+
+func stopDetail(c store.Campaign) string {
+	spend, back, when := c.SpendPaise, c.RevenuePaise, "so far"
+	if c.JudgedOn == "last_7_days" {
+		spend, back, when = c.Spend7Paise, c.Revenue7Paise, "in the last 7 days"
+	}
+	return fmt.Sprintf("%s spent, %s back %s. Pause it or turn on auto-stop.", rupees(spend), rupees(back), when)
 }

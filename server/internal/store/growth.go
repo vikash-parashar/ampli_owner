@@ -160,7 +160,22 @@ type PromoReport struct {
 	Available int64  `json:"available"`
 	Eligible  int64  `json:"eligible"` // verified, unrefunded Pro buyers of the source app
 	Claimed   int64  `json:"claimed"`
-	Redeemed  int64  `json:"redeemed"` // promo-code purchases of the sku in the target app since the first claim
+	Redeemed  int64  `json:"redeemed"`        // promo-code purchases of the sku in the target app since the first claim
+	Refunded  int64  `json:"refunded_claims"` // claimers whose source-app Pro was refunded afterwards (they kept the code)
+}
+
+// ProBoughtAt is when this install's first confirmed, unrefunded Pro purchase was made (ErrNotFound if none).
+func (s *Store) ProBoughtAt(ctx context.Context, product, installID string) (time.Time, error) {
+	var at *time.Time
+	err := s.DB.QueryRow(ctx, `SELECT min(created_at) FROM purchases WHERE product_id=$1 AND install_id=$2 AND kind='pro'
+		AND verified AND refunded_at IS NULL`, product, installID).Scan(&at)
+	if err == nil && at == nil {
+		return time.Time{}, ErrNotFound
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	return *at, nil
 }
 
 func (s *Store) PromoReports(ctx context.Context) ([]PromoReport, error) {
@@ -170,13 +185,18 @@ func (s *Store) PromoReports(ctx context.Context) ([]PromoReport, error) {
 		     AND p.verified AND p.refunded_at IS NULL),
 		  count(*) FILTER (WHERE c.claimed_at IS NOT NULL),
 		  (SELECT count(*) FROM purchases p WHERE p.product_id=c.target_product AND p.sku=c.sku AND p.region='PROMO'
-		     AND p.created_at >= COALESCE(min(c.claimed_at), 'infinity'))
+		     AND p.created_at >= COALESCE(min(c.claimed_at), 'infinity')),
+		  count(*) FILTER (WHERE c.claimed_install IS NOT NULL
+		    AND EXISTS (SELECT 1 FROM purchases p WHERE p.product_id=c.source_product AND p.install_id=c.claimed_install
+		      AND p.kind='pro' AND p.refunded_at IS NOT NULL)
+		    AND NOT EXISTS (SELECT 1 FROM purchases p WHERE p.product_id=c.source_product AND p.install_id=c.claimed_install
+		      AND p.kind='pro' AND p.verified AND p.refunded_at IS NULL))
 		FROM promo_codes c GROUP BY 1,2,3 ORDER BY 1,2,3`)
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (PromoReport, error) {
 		var p PromoReport
-		return p, r.Scan(&p.Source, &p.Target, &p.SKU, &p.Imported, &p.Available, &p.Eligible, &p.Claimed, &p.Redeemed)
+		return p, r.Scan(&p.Source, &p.Target, &p.SKU, &p.Imported, &p.Available, &p.Eligible, &p.Claimed, &p.Redeemed, &p.Refunded)
 	})
 }

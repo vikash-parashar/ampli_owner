@@ -432,7 +432,8 @@ private fun AdsContent(
             Text(
                 "ROAS = money earned from people who installed through the ad ÷ money spent. " +
                     "1.5x or more says scale, 0.8x to 1.5x says watch, under 0.8x says stop. " +
-                    "Under 5 days of data is too early to judge. Money is net (after Google's fee and GST) " +
+                    "Under 5 days of data is too early to judge. After 14 days a campaign is judged on its last 7 days, " +
+                    "so one that started well and faded is still caught. Money is net (after Google's fee and GST) " +
                     "from verified purchases only. Campaigns marked \"Estimate\" have installs matched by platform and time, " +
                     "not by our link, until the apps send Play install referrers.",
                 fontSize = 11.5.sp, color = a.muted, lineHeight = 17.sp,
@@ -501,6 +502,14 @@ private fun CampaignItem(nav: Nav, c: AdCampaign, actions: CampaignActions) {
                     if (noResults) "–" else f2(c.roas) + "x",
                     if (noResults) a.muted else if (c.roas >= 1.0) a.good else a.bad,
                     Modifier.weight(1f).fillMaxHeight(),
+                )
+            }
+            if (c.judgedOn == "last_7_days" && !noResults) {
+                Text(
+                    "Last 7 days: ${compactRupees(c.spend7dPaise)} spent, ${compactRupees(c.revenue7dPaise)} back, ${f2(c.roas7d)}x",
+                    fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
+                    color = if (c.roas7d >= 1.0) a.good else a.bad,
+                    modifier = Modifier.padding(top = 8.dp),
                 )
             }
             val why = if (c.status == "error" && c.lastError.isNotBlank()) c.lastError else v.reason

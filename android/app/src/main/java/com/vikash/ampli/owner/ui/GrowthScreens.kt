@@ -370,6 +370,13 @@ private fun PromoCard(p: PromoPair, key: String, modifier: Modifier, onAdd: () -
             fontSize = 11.5.sp, color = a.muted, textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
         )
+        if (p.refundedClaims > 0) {
+            Text(
+                "${grouped(p.refundedClaims)} refunded their ${Products.short(p.sourceProduct)} Pro after getting a code. Codes unlock 48 hours after buying to keep this low.",
+                fontSize = 11.5.sp, color = a.warn, textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            )
+        }
         if (low) {
             Text(
                 "Add more codes so every ${Products.short(p.sourceProduct)} Pro buyer gets one.",
