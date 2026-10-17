@@ -131,7 +131,15 @@ live campaigns with a Stop verdict, campaigns in error, expired ad accounts or A
   "play": {"configured": true, "last_sync_at": null, "last_error": ""}}`
 - `POST /v1/integrations/admob/connect` → `{"auth_url": "..."}` (open in the browser, like ad accounts).
 - `POST /v1/integrations/sync` → `{"admob_days": 30, "vitals": 3, "reviews": 12, "play_days": 0, "errors": []}`
-  (AdMob earnings → ad revenue, Play vitals, Play reviews, Play installs/ratings reports).
+  (AdMob earnings → ad revenue, Play vitals, Play reviews, Play installs/ratings reports). Also returns `"refunds"`.
+- `DELETE /v1/integrations/admob` → 204 (forget the AdMob login).
+
+## SKUs and data deletion
+- `GET /v1/skus` → `[{"product","sku","kind","price_paise"}]`; `PUT /v1/skus` with one of those → it (add or change a price).
+- `DELETE /v1/installs/{install_id}` → `{"erased_rows": 3}`.
+
+## Owner token rotation
+The server accepts `OWNER_TOKEN` and, when set, `OWNER_TOKEN_NEXT`.
 
 ## Dashboard
 Adds `"vitals": {"day": "2026-10-15", "crash_rate": 0.0042, "anr_rate": 0.0011}` (null when unknown; Play's limits are

@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/vikash-parashar/ampli_owner/server/internal/admob"
 	"github.com/vikash-parashar/ampli_owner/server/internal/ads"
 	"github.com/vikash-parashar/ampli_owner/server/internal/play"
 	"github.com/vikash-parashar/ampli_owner/server/internal/secret"
@@ -32,6 +33,10 @@ type Server struct {
 	PublicURL string                  // where the platforms send the browser back, e.g. https://abc.lambda-url.ap-south-1.on.aws
 	Platforms map[string]ads.Platform // meta, tiktok, google
 	Play      *play.Client
+
+	AdMob          *admob.Client // ad earnings (reuses the Google OAuth client)
+	PlayBucket     string        // Play Console bulk reports bucket, pubsite_prod_rev_...
+	OwnerTokenNext string        // accepted alongside OwnerToken while rotating it
 }
 
 func (s *Server) Handler() http.Handler {
@@ -78,6 +83,16 @@ func (s *Server) Handler() http.Handler {
 	owner.HandleFunc("GET /v1/ads/campaigns", s.adCampaigns)
 	owner.HandleFunc("POST /v1/ads/campaigns", s.createAdCampaign)
 	owner.HandleFunc("POST /v1/ads/campaigns/{id}/{action}", s.campaignAction)
+	owner.HandleFunc("GET /v1/ads/campaigns/{id}/log", s.campaignLog)
+	owner.HandleFunc("DELETE /v1/ads/campaigns/{id}", s.deleteCampaign)
+	owner.HandleFunc("GET /v1/alerts", s.alerts)
+	owner.HandleFunc("GET /v1/integrations", s.integrations)
+	owner.HandleFunc("POST /v1/integrations/admob/connect", s.connectAdMob)
+	owner.HandleFunc("DELETE /v1/integrations/admob", s.disconnectAdMob)
+	owner.HandleFunc("POST /v1/integrations/sync", s.syncIntegrations)
+	owner.HandleFunc("GET /v1/skus", s.skus)
+	owner.HandleFunc("PUT /v1/skus", s.saveSKU)
+	owner.HandleFunc("DELETE /v1/installs/{install}", s.eraseInstall)
 	owner.HandleFunc("POST /v1/ads/sync", s.syncAds)
 	owner.HandleFunc("GET /v1/reviews", s.reviews)
 	owner.HandleFunc("POST /v1/reviews", s.addReview)
@@ -104,7 +119,10 @@ func methodOverride(next http.Handler) http.Handler {
 func (s *Server) requireOwner(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if s.OwnerToken == "" || !ok || subtle.ConstantTimeCompare([]byte(got), []byte(s.OwnerToken)) != 1 {
+		match := func(want string) bool {
+			return want != "" && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+		}
+		if !ok || !(match(s.OwnerToken) || match(s.OwnerTokenNext)) {
 			writeErr(w, http.StatusUnauthorized, "owner token required")
 			return
 		}

@@ -11,10 +11,13 @@
 //	META_APP_ID, META_APP_SECRET, META_PAGE_ID, META_PROMOTED_APPS, META_GRAPH_VERSION
 //	TIKTOK_APP_ID, TIKTOK_APP_SECRET, TIKTOK_PROMOTED_APPS
 //	GOOGLE_ADS_CLIENT_ID, GOOGLE_ADS_CLIENT_SECRET, GOOGLE_ADS_DEVELOPER_TOKEN, GOOGLE_ADS_LOGIN_CUSTOMER_ID, GOOGLE_ADS_API_VERSION
-//	PLAY_SERVICE_ACCOUNT_JSON, FX_RATES
+//	PLAY_SERVICE_ACCOUNT_JSON, PLAY_GCS_BUCKET, FX_RATES
+//	ADMOB_APPS ("mp3=ca-app-pub-...~123,naukri=...", uses the Google Ads OAuth client)
+//	OWNER_TOKEN_NEXT  a second accepted owner token while rotating OWNER_TOKEN
 //
 // `server seed <dir>` loads checklist.json, guides.json and features.json from dir and exits.
-// `server sync` pulls ad results and Play reviews once and exits (for a cron or scheduled task).
+// `server sync` pulls ad results, AdMob and Google Play once and exits (for a cron or scheduled task).
+// On Lambda, an EventBridge Scheduler event with the payload {"task":"sync"} does the same.
 package main
 
 import (
@@ -25,11 +28,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/akrylysov/algnhsa"
+	"github.com/aws/aws-lambda-go/lambda"
 
+	"github.com/vikash-parashar/ampli_owner/server/internal/admob"
 	"github.com/vikash-parashar/ampli_owner/server/internal/ads"
 	"github.com/vikash-parashar/ampli_owner/server/internal/api"
 	"github.com/vikash-parashar/ampli_owner/server/internal/play"
@@ -53,6 +59,11 @@ func run() error {
 	if dbURL == "" {
 		return errMissing("DATABASE_URL")
 	}
+	onLambda := os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != ""
+	if onLambda && !strings.Contains(dbURL, "pool_max_conns") {
+		// Each Lambda instance serves one request at a time; keep Postgres connections low.
+		dbURL += map[bool]string{true: "&", false: "?"}[strings.Contains(dbURL, "?")] + "pool_max_conns=2"
+	}
 	st, err := store.Open(ctx, dbURL)
 	if err != nil {
 		return err
@@ -71,18 +82,16 @@ func run() error {
 		return err
 	}
 	if len(os.Args) == 2 && os.Args[1] == "sync" {
-		n, problems := srv.SyncAds(ctx, true)
-		m, more := srv.SyncReviews(ctx)
-		slog.Info("synced", "ad_accounts", n, "reviews", m, "problems", append(problems, more...))
+		syncAll(ctx, srv)
 		return nil
 	}
-	if len(srv.OwnerToken) < 24 {
-		return errMissing("OWNER_TOKEN (24+ characters)")
+	if len(srv.OwnerToken) < 24 || (srv.OwnerTokenNext != "" && len(srv.OwnerTokenNext) < 24) {
+		return errMissing("OWNER_TOKEN (24+ characters; OWNER_TOKEN_NEXT too when set)")
 	}
 	h := srv.Handler()
 
-	if os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" {
-		algnhsa.ListenAndServe(h, nil)
+	if onLambda {
+		lambda.StartWithOptions(scheduled{http: algnhsa.New(h, nil), srv: srv})
 		return nil
 	}
 
@@ -104,15 +113,41 @@ func run() error {
 	return nil
 }
 
+func syncAll(ctx context.Context, srv *api.Server) map[string]any {
+	n, problems := srv.SyncAds(ctx, true)
+	res := srv.SyncIntegrations(ctx)
+	out := map[string]any{"ad_accounts": n, "admob_days": res.AdMobDays, "vitals": res.Vitals, "reviews": res.Reviews,
+		"play_days": res.PlayDays, "refunds": res.Refunds, "errors": append(problems, res.Errors...)}
+	slog.Info("synced", "result", out)
+	return out
+}
+
+// scheduled routes {"task":"sync"} events to the sync and everything else (Function URL requests) to HTTP.
+type scheduled struct {
+	http lambda.Handler
+	srv  *api.Server
+}
+
+func (h scheduled) Invoke(ctx context.Context, payload []byte) ([]byte, error) {
+	var ev struct {
+		Task string `json:"task"`
+	}
+	if json.Unmarshal(payload, &ev) == nil && ev.Task == "sync" {
+		return json.Marshal(syncAll(ctx, h.srv))
+	}
+	return h.http.Invoke(ctx, payload)
+}
+
 // newServer reads the optional ads and Play settings from the environment.
 func newServer(st *store.Store) (*api.Server, error) {
 	env := os.Getenv
-	s := &api.Server{Store: st, OwnerToken: env("OWNER_TOKEN"), PublicURL: env("PUBLIC_URL"), Platforms: map[string]ads.Platform{
-		"meta":   ads.NewMeta(env("META_APP_ID"), env("META_APP_SECRET"), env("META_PAGE_ID"), env("META_PROMOTED_APPS"), env("META_GRAPH_VERSION")),
-		"tiktok": ads.NewTikTok(env("TIKTOK_APP_ID"), env("TIKTOK_APP_SECRET"), env("TIKTOK_PROMOTED_APPS")),
-		"google": ads.NewGoogle(env("GOOGLE_ADS_CLIENT_ID"), env("GOOGLE_ADS_CLIENT_SECRET"), env("GOOGLE_ADS_DEVELOPER_TOKEN"),
-			env("GOOGLE_ADS_LOGIN_CUSTOMER_ID"), env("GOOGLE_ADS_API_VERSION")),
-	}}
+	s := &api.Server{Store: st, OwnerToken: env("OWNER_TOKEN"), OwnerTokenNext: env("OWNER_TOKEN_NEXT"), PublicURL: env("PUBLIC_URL"),
+		PlayBucket: env("PLAY_GCS_BUCKET"), AdMob: admob.New(env("GOOGLE_ADS_CLIENT_ID"), env("GOOGLE_ADS_CLIENT_SECRET"), env("ADMOB_APPS")), Platforms: map[string]ads.Platform{
+			"meta":   ads.NewMeta(env("META_APP_ID"), env("META_APP_SECRET"), env("META_PAGE_ID"), env("META_PROMOTED_APPS"), env("META_GRAPH_VERSION")),
+			"tiktok": ads.NewTikTok(env("TIKTOK_APP_ID"), env("TIKTOK_APP_SECRET"), env("TIKTOK_PROMOTED_APPS")),
+			"google": ads.NewGoogle(env("GOOGLE_ADS_CLIENT_ID"), env("GOOGLE_ADS_CLIENT_SECRET"), env("GOOGLE_ADS_DEVELOPER_TOKEN"),
+				env("GOOGLE_ADS_LOGIN_CUSTOMER_ID"), env("GOOGLE_ADS_API_VERSION")),
+		}}
 	if k := env("TOKEN_KEY"); k != "" {
 		box, err := secret.New(k)
 		if err != nil {

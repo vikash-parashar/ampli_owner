@@ -68,7 +68,7 @@ func (s *Store) IntegrationToken(ctx context.Context, kind string) (Integration,
 	var t SealedToken
 	err := s.DB.QueryRow(ctx, `SELECT kind, account, last_sync_at, last_error, token_enc, refresh_enc, expires_at FROM integrations WHERE kind=$1`, kind).
 		Scan(&in.Kind, &in.Account, &in.LastSyncAt, &in.LastError, &t.Access, &t.Refresh, &t.Expires)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && t.Access == nil) {
 		return in, t, ErrNotFound
 	}
 	return in, t, err
@@ -79,9 +79,39 @@ func (s *Store) UpdateIntegrationToken(ctx context.Context, kind string, t Seale
 	return err
 }
 
+// MarkIntegration records a sync result (creating the row for Play, which has no token).
 func (s *Store) MarkIntegration(ctx context.Context, kind, lastErr string, synced bool) error {
-	_, err := s.DB.Exec(ctx, `UPDATE integrations SET last_error=$2, last_sync_at = CASE WHEN $3 THEN now() ELSE last_sync_at END
-		WHERE kind=$1`, kind, lastErr, synced)
+	_, err := s.DB.Exec(ctx, `INSERT INTO integrations (kind, last_error, last_sync_at)
+		VALUES ($1, $2, CASE WHEN $3 THEN now() END)
+		ON CONFLICT (kind) DO UPDATE SET last_error=EXCLUDED.last_error,
+		last_sync_at = CASE WHEN $3 THEN now() ELSE integrations.last_sync_at END`, kind, lastErr, synced)
+	return err
+}
+
+// Integrations returns every integration row by kind; Connected is true when a token is stored.
+func (s *Store) Integrations(ctx context.Context) (map[string]IntegrationState, error) {
+	rows, err := s.DB.Query(ctx, `SELECT kind, account, last_sync_at, last_error, token_enc IS NOT NULL FROM integrations`)
+	if err != nil {
+		return nil, err
+	}
+	list, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (IntegrationState, error) {
+		var in IntegrationState
+		return in, r.Scan(&in.Kind, &in.Account, &in.LastSyncAt, &in.LastError, &in.Connected)
+	})
+	out := map[string]IntegrationState{}
+	for _, in := range list {
+		out[in.Kind] = in
+	}
+	return out, err
+}
+
+type IntegrationState struct {
+	Integration
+	Connected bool `json:"connected"`
+}
+
+func (s *Store) DeleteIntegration(ctx context.Context, kind string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE integrations SET token_enc=NULL, refresh_enc=NULL, expires_at=NULL, account='' WHERE kind=$1`, kind)
 	return err
 }
 

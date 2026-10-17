@@ -111,6 +111,7 @@ type Campaign struct {
 	CreativeURL        string      `json:"creative_url"`
 	LastError          string      `json:"last_error"`
 	AutoStop           AutoStop    `json:"auto_stop"`
+	Attribution        string      `json:"attribution"` // link, estimate or none
 	CreatedAt          time.Time   `json:"created_at"`
 	ExternalID         string      `json:"-"`
 	ExternalSetID      string      `json:"-"`
@@ -129,13 +130,13 @@ type AutoStop struct {
 // otherwise to the newest campaign on the same platform for the same app that started before the install.
 const attribution = `
 WITH att AS (
-  SELECT i.product_id, i.install_id, COALESCE(
-    (SELECT c.id FROM campaigns c WHERE i.utm_campaign <> '' AND c.utm_campaign = i.utm_campaign),
+  SELECT i.product_id, i.install_id, l.id AS link_id, COALESCE(l.id,
     (SELECT c.id FROM campaigns c WHERE i.ad_platform <> '' AND c.platform = i.ad_platform AND c.product_id = i.product_id
        AND c.created_at <= i.created_at AND c.status <> 'draft' ORDER BY c.created_at DESC, c.id DESC LIMIT 1)) AS campaign_id
-  FROM installs i WHERE i.ad_platform <> '' OR i.utm_campaign LIKE 'ampli-c%'
+  FROM installs i LEFT JOIN campaigns l ON i.utm_campaign <> '' AND l.utm_campaign = i.utm_campaign
+  WHERE i.ad_platform <> '' OR i.utm_campaign LIKE 'ampli-c%'
 ), per AS (
-  SELECT att.campaign_id, count(*) AS installs, COALESCE(sum(p.amt), 0)::bigint AS revenue
+  SELECT att.campaign_id, count(*) AS installs, count(att.link_id) AS by_link, COALESCE(sum(p.amt), 0)::bigint AS revenue
   FROM att LEFT JOIN (SELECT product_id, install_id, sum(net_paise) AS amt FROM purchases
     WHERE verified AND refunded_at IS NULL GROUP BY 1, 2) p
     ON p.product_id = att.product_id AND p.install_id = att.install_id
@@ -147,16 +148,16 @@ SELECT c.id, c.platform, COALESCE(c.product_id, ''), c.name, c.status, c.countri
   c.impressions, c.clicks, c.installs, c.revenue_paise, c.ad_account_id, COALESCE(c.utm_campaign, ''), c.creative_url, c.last_error,
   c.created_at, c.external_id, c.external_set_id, c.auto_stop, c.auto_min_roas, c.auto_min_days, c.auto_min_spend,
   (SELECT count(*) FROM campaign_days d WHERE d.campaign_id = c.id AND d.spend_paise > 0)::int,
-  COALESCE(per.installs, 0), COALESCE(per.revenue, 0)
+  COALESCE(per.installs, 0), COALESCE(per.by_link, 0), COALESCE(per.revenue, 0)
 FROM campaigns c LEFT JOIN per ON per.campaign_id = c.id`
 
 func scanCampaign(r pgx.Row) (Campaign, error) {
 	var c Campaign
-	var attrRev int64
+	var attrRev, byLink int64
 	err := r.Scan(&c.ID, &c.Platform, &c.ProductID, &c.Name, &c.Status, &c.Countries, &c.DailyBudgetPaise, &c.SpendPaise,
 		&c.Impressions, &c.Clicks, &c.Installs, &c.manualRevenue, &c.AdAccountID, &c.UTMCampaign, &c.CreativeURL, &c.LastError,
 		&c.CreatedAt, &c.ExternalID, &c.ExternalSetID, &c.AutoStop.Enabled, &c.AutoStop.MinROAS, &c.AutoStop.MinDays,
-		&c.AutoStop.MinSpendPaise, &c.Days, &c.AttributedInstalls, &attrRev)
+		&c.AutoStop.MinSpendPaise, &c.Days, &c.AttributedInstalls, &byLink, &attrRev)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return c, ErrNotFound
 	}
@@ -164,6 +165,14 @@ func scanCampaign(r pgx.Row) (Campaign, error) {
 		return c, err
 	}
 	c.RevenuePaise = attrRev + c.manualRevenue
+	switch {
+	case c.AttributedInstalls == 0:
+		c.Attribution = "none"
+	case byLink == c.AttributedInstalls:
+		c.Attribution = "link"
+	default:
+		c.Attribution = "estimate" // some installs matched by platform and time only
+	}
 	if c.Installs == 0 {
 		c.Installs = c.AttributedInstalls
 	}
@@ -233,6 +242,15 @@ func (s *Store) SetCampaignStatus(ctx context.Context, id int64, status, lastErr
 
 func (s *Store) SetCampaignBudget(ctx context.Context, id int64, paise int64) error {
 	_, err := s.DB.Exec(ctx, `UPDATE campaigns SET daily_budget_paise=$2, budget_paise=$2, last_error='' WHERE id=$1`, id, paise)
+	return err
+}
+
+// DeleteCampaign removes a campaign with its daily numbers and log.
+func (s *Store) DeleteCampaign(ctx context.Context, id int64) error {
+	tag, err := s.DB.Exec(ctx, `DELETE FROM campaigns WHERE id=$1`, id)
+	if err == nil && tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
 	return err
 }
 

@@ -31,10 +31,24 @@ Tests need a throwaway Postgres: `make test` (uses `TEST_DATABASE_URL`).
 2. `make lambda` builds `build/ampli-owner-lambda.zip` (arm64 `bootstrap`; CI uploads it as an artifact too).
 3. Create a Lambda: runtime `provided.al2023`, arch arm64, handler `bootstrap`; env `DATABASE_URL`,
    `OWNER_TOKEN` (24+ random characters); enable a Function URL (auth NONE; the app sends the token).
+   Set **reserved concurrency to 5**: the public endpoints are open to the internet, and this caps both the
+   bill and the Postgres connections (the server uses at most 2 connections per instance on Lambda).
 4. Seed once from your laptop: `DATABASE_URL=... go run ./cmd/server seed seed`.
-5. Put the Function URL and token in the app's Settings.
+5. Put the Function URL and token in the app's Settings. The app keeps it encrypted with an Android Keystore key
+   and asks for your fingerprint before showing money screens.
+6. Daily sync: EventBridge Scheduler > target this Lambda > payload `{"task":"sync"}` (once a day, 06:00 IST).
+   It pulls ad results (and runs auto-stop rules), AdMob earnings, Play vitals, reviews, refunds and reports.
 
-Secrets live in Lambda env / AWS Secrets Manager and GitHub secrets, never in the repo.
+Secrets live in Lambda env (or SSM Parameter Store SecureString / Secrets Manager) and GitHub secrets, never in
+the repo or chat.
+
+**Rotating the owner token.** Set `OWNER_TOKEN_NEXT` to a new value, update the app's Settings, then move the new
+value into `OWNER_TOKEN` and clear `OWNER_TOKEN_NEXT`. Both work in between, so nothing breaks.
+
+**Release APK signing.** CI signs release APKs when these GitHub secrets exist: `OWNER_KEYSTORE_BASE64`
+(`base64 -w0 owner.jks`), `OWNER_KEYSTORE_PASSWORD`, `OWNER_KEY_ALIAS`, `OWNER_KEY_PASSWORD`. Create the
+keystore once with `keytool -genkeypair -v -keystore owner.jks -alias owner -keyalg RSA -keysize 4096 -validity 10000`
+and keep a copy offline: losing it means uninstalling to update.
 
 ## Connect ad accounts
 The app never holds an ad token: you sign in once in the browser, the platform sends the browser back to the
@@ -62,30 +76,47 @@ API Center (Basic access). In Google Cloud create an OAuth client of type *Web a
 
 Use INR ad accounts where possible. Spend in other currencies is converted with `FX_RATES` (default `USD=84,...`).
 
-**Google Play reviews.** Google Cloud service account with a JSON key; in Play Console > Users and permissions,
-invite its email with "View app information" and "Reply to reviews". Env: `PLAY_SERVICE_ACCOUNT_JSON` (the file
-contents). Play only returns the last week of reviews, so sync at least weekly.
+For Meta, a **System User** token (Business settings > Users > System users, role Admin, assign the ad account
+and app) does not expire every 60 days like a personal login. For Google, publish the OAuth consent screen
+("In production"); in Testing mode Google refresh tokens die after 7 days.
 
-**Sync.** The app syncs when you open Ads (at most every 10 minutes per account). For a schedule, run
-`server sync` daily (EventBridge Scheduler running the same image as a task, or any cron).
+**Google Play (purchases, reviews, vitals, reports).** Google Cloud project > enable *Google Play Android Developer
+API* and *Google Play Developer Reporting API* > service account with a JSON key. In Play Console > Users and
+permissions, invite its email with "View app information and download bulk reports", "View financial data",
+"Manage orders" and "Reply to reviews". Env: `PLAY_SERVICE_ACCOUNT_JSON` (the file contents) and
+`PLAY_GCS_BUCKET` (Play Console > Download reports > copy the Cloud Storage URI, the `pubsite_prod_...` part).
+With the service account set, every purchase is checked with Google before it counts as money.
+
+**Prices.** The server prices purchases from its own SKU table (`GET/PUT /v1/skus`), seeded with ampli_pro ₹199,
+ampli_drive_pro ₹499 and the ₹49/99/199 tips. Make it match Play Console when you create the products.
+Revenue everywhere is net: minus 18% GST, then minus Google's 15%.
+
+**AdMob.** Uses the same Google OAuth client: add `PUBLIC_URL/oauth/admob/callback` as a redirect URI and enable
+the AdMob API. Env: `ADMOB_APPS=mp3=ca-app-pub-...~...,naukri=...`. Then Settings > AdMob > Connect in the app.
+
+**Deleting a user's data.** A user who asks gets their install id from their app's Settings; `DELETE
+/v1/installs/{id}` removes their reports, votes and install record (purchases keep the money, not the link).
+
+**Sync.** The app syncs when you open Ads (at most every 10 minutes per account). The daily schedule is the
+`{"task":"sync"}` event above; outside Lambda run `server sync` from any cron.
 
 ### How results are attributed
 Each product app sends `POST /v1/public/installs` once with the Play Install Referrer, and
 `POST /v1/public/purchases` after each purchase. An install goes to a campaign when its `utm_campaign` is that
-campaign's `ampli-cN` link, otherwise to the newest campaign on the same platform for the same app. Earned money =
-purchases by attributed installs. Verdict: under 5 days of spend = too early; ROAS 1.5x or more = scale;
+campaign's `ampli-cN` link, otherwise to the newest campaign on the same platform for the same app; the app labels
+the second kind "estimate". Earned money = verified, unrefunded net purchases by attributed installs. Verdict: under 5 days of spend = too early; ROAS 1.5x or more = scale;
 0.8x to 1.5x = watch; under 0.8x = stop. Spend, clicks and platform-counted installs come from the sync.
+Auto-stop (per campaign, off by default) pauses a live campaign on the platform once ROAS stays under its limit
+after the minimum days and spend; every owner and rule action is in the campaign's log.
 
 ## API
 Full shapes: [docs/api-v2.md](docs/api-v2.md).
 Owner (bearer token): `/v1/overview`, `/v1/dashboard`, `/v1/tickets`, `/v1/tickets/{id}/messages`, `/v1/checklist`,
 `/v1/todos`, `/v1/features`, `/v1/stats`, `/v1/guides`, `/v1/ads/platforms`, `/v1/ads/connect/{platform}`,
-`/v1/ads/accounts/{id}`, `/v1/ads/campaigns`, `/v1/ads/campaigns/{id}/pause|resume|budget`, `/v1/ads/sync`,
-`/v1/reviews`, `/v1/reviews/{id}/reply`, `/v1/reviews/sync`.
+`/v1/ads/accounts/{id}`, `/v1/ads/campaigns`, `/v1/ads/campaigns/{id}/pause|resume|budget|autostop|log`, `/v1/ads/sync`,
+`/v1/reviews`, `/v1/reviews/{id}/reply`, `/v1/reviews/sync`, `/v1/alerts`, `/v1/integrations`,
+`/v1/integrations/admob/connect`, `/v1/integrations/sync`, `/v1/skus`, `DELETE /v1/installs/{id}`.
 Public (product apps): `POST /v1/public/reports`, `GET /v1/public/reports?install_id=`, `GET /v1/public/features?product=`,
 `POST /v1/public/features/{id}/vote` (5 reports per install per day), `POST /v1/public/installs`,
-`POST /v1/public/purchases`, `POST /v1/public/events` (30 calls per install per day).
-
-## Later
-Play installs and AdMob earnings still go in by hand (Dashboard > Add day's numbers) until Play Console and AdMob
-report exports are wired in.
+`POST /v1/public/purchases`, `POST /v1/public/events` (30 calls per install and 300 per network per day; install ids
+must be random UUID v4; event names come from a fixed list per app).

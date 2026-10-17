@@ -1,0 +1,270 @@
+package api
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/vikash-parashar/ampli_owner/server/internal/admob"
+	"github.com/vikash-parashar/ampli_owner/server/internal/store"
+)
+
+type integrationView struct {
+	Configured bool       `json:"configured"`
+	Connected  bool       `json:"connected"`
+	Account    string     `json:"account"`
+	LastSyncAt *time.Time `json:"last_sync_at"`
+	LastError  string     `json:"last_error"`
+}
+
+func (s *Server) admobReady() bool {
+	return s.AdMob != nil && s.AdMob.Configured() && s.Box != nil && s.PublicURL != ""
+}
+
+func (s *Server) integrations(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.Store.Integrations(r.Context())
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	am, pl := rows["admob"], rows["play"]
+	writeJSON(w, http.StatusOK, map[string]integrationView{
+		"admob": {Configured: s.admobReady(), Connected: am.Connected, Account: am.Account, LastSyncAt: am.LastSyncAt, LastError: am.LastError},
+		"play":  {Configured: s.Play != nil, Connected: s.Play != nil, LastSyncAt: pl.LastSyncAt, LastError: pl.LastError},
+	})
+}
+
+func (s *Server) connectAdMob(w http.ResponseWriter, r *http.Request) {
+	if !s.admobReady() {
+		writeErr(w, http.StatusConflict, "set GOOGLE_ADS_CLIENT_ID/SECRET, ADMOB_APPS, TOKEN_KEY and PUBLIC_URL on the server first")
+		return
+	}
+	state := s.Box.State("admob", s.Now(), 15*time.Minute)
+	writeJSON(w, http.StatusOK, map[string]string{"auth_url": s.AdMob.AuthURL(state, s.redirectURL("admob"))})
+}
+
+func (s *Server) disconnectAdMob(w http.ResponseWriter, r *http.Request) {
+	if err := s.Store.DeleteIntegration(r.Context(), "admob"); err != nil {
+		fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) admobCallback(r *http.Request, page func(int, string, string)) {
+	q := r.URL.Query()
+	if !s.admobReady() {
+		page(http.StatusNotFound, "AdMob is not set up", "")
+		return
+	}
+	if got, err := s.Box.CheckState(q.Get("state"), s.Now()); err != nil || got != "admob" {
+		page(http.StatusBadRequest, "Link expired", "Start again from Ampli Owner > Settings > AdMob.")
+		return
+	}
+	if e := q.Get("error"); e != "" || q.Get("code") == "" {
+		page(http.StatusBadRequest, "Not connected", firstOf(q.Get("error_description"), e, "The sign-in did not return a code."))
+		return
+	}
+	tok, account, err := s.AdMob.Exchange(r.Context(), q.Get("code"), s.redirectURL("admob"))
+	if err != nil {
+		slog.Error("admob exchange", "err", err)
+		page(http.StatusBadGateway, "Not connected", err.Error())
+		return
+	}
+	sealed := store.SealedToken{Access: s.Box.Seal(tok.Access)}
+	if tok.Refresh != "" {
+		sealed.Refresh = s.Box.Seal(tok.Refresh)
+	}
+	if !tok.Expires.IsZero() {
+		e := tok.Expires
+		sealed.Expires = &e
+	}
+	if err := s.Store.SaveIntegration(r.Context(), "admob", account, sealed); err != nil {
+		page(http.StatusInternalServerError, "Not connected", "Could not save the AdMob login.")
+		return
+	}
+	page(http.StatusOK, "AdMob connected", "Ad earnings will show on the dashboards after the next sync. Go back to Ampli Owner.")
+}
+
+// SyncResult is what one integrations sync did.
+type SyncResult struct {
+	AdMobDays int      `json:"admob_days"`
+	Vitals    int      `json:"vitals"`
+	Reviews   int      `json:"reviews"`
+	PlayDays  int      `json:"play_days"`
+	Refunds   int      `json:"refunds"`
+	Errors    []string `json:"errors"`
+}
+
+// SyncIntegrations pulls AdMob earnings and everything from Google Play, then drops old rate-limit rows.
+func (s *Server) SyncIntegrations(ctx context.Context) SyncResult {
+	res := SyncResult{Errors: []string{}}
+	today := s.today()
+	add := func(prefix string, err error) { res.Errors = append(res.Errors, prefix+": "+err.Error()) }
+
+	if s.admobReady() {
+		n, err := s.syncAdMob(ctx, today)
+		res.AdMobDays = n
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			add("AdMob", err)
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			_ = s.Store.MarkIntegration(ctx, "admob", errText(err), err == nil)
+		}
+	}
+
+	if s.Play != nil {
+		before := len(res.Errors)
+		prods, err := s.Store.Products(ctx)
+		if err != nil {
+			add("products", err)
+		}
+		for _, p := range prods {
+			days, err := s.Play.Vitals(ctx, p.PackageID, today.AddDate(0, 0, -7), today.AddDate(0, 0, -1))
+			if err != nil {
+				add(p.Name+" vitals", err)
+			}
+			for _, d := range days {
+				if err := s.Store.SaveVitals(ctx, p.ID, d.Day, d.Crash, d.ANR); err == nil {
+					res.Vitals++
+				}
+			}
+			voided, err := s.Play.VoidedPurchases(ctx, p.PackageID, today.AddDate(0, 0, -30))
+			if err != nil {
+				add(p.Name+" refunds", err)
+			}
+			for _, v := range voided {
+				if err := s.Store.MarkRefunded(ctx, v.OrderID, v.At); err == nil {
+					res.Refunds++
+				}
+			}
+			if s.PlayBucket == "" {
+				continue
+			}
+			for _, month := range []time.Time{today.AddDate(0, -1, 0), today} {
+				rows, err := s.Play.BulkStats(ctx, s.PlayBucket, p.PackageID, month)
+				if err != nil {
+					add(fmt.Sprintf("%s Play report %s", p.Name, month.Format("Jan")), err)
+					continue
+				}
+				for _, d := range rows {
+					if err := s.Store.SetPlayStats(ctx, p.ID, d.Day, d.Installs, d.Uninstalls, d.Active, d.Rating); err == nil {
+						res.PlayDays++
+					}
+				}
+			}
+		}
+		n, problems := s.SyncReviews(ctx)
+		res.Reviews = n
+		res.Errors = append(res.Errors, problems...)
+		var lastErr error
+		if len(res.Errors) > before {
+			lastErr = errors.New(res.Errors[before])
+		}
+		_ = s.Store.MarkIntegration(ctx, "play", errText(lastErr), lastErr == nil)
+	}
+
+	if err := s.Store.Cleanup(ctx, today); err != nil {
+		add("cleanup", err)
+	}
+	return res
+}
+
+func (s *Server) syncAdMob(ctx context.Context, today time.Time) (int, error) {
+	in, sealed, err := s.Store.IntegrationToken(ctx, "admob")
+	if err != nil {
+		return 0, err
+	}
+	var t admob.Token
+	if t.Access, err = s.Box.Open(sealed.Access); err != nil {
+		return 0, errors.New("stored AdMob login unreadable (TOKEN_KEY changed?), connect again")
+	}
+	if sealed.Refresh != nil {
+		t.Refresh, _ = s.Box.Open(sealed.Refresh)
+	}
+	if sealed.Expires != nil {
+		t.Expires = *sealed.Expires
+	}
+	fresh, err := s.AdMob.Fresh(ctx, t)
+	if err != nil {
+		return 0, err
+	}
+	if fresh.Access != t.Access {
+		up := store.SealedToken{Access: s.Box.Seal(fresh.Access)}
+		if !fresh.Expires.IsZero() {
+			e := fresh.Expires
+			up.Expires = &e
+		}
+		if err := s.Store.UpdateIntegrationToken(ctx, "admob", up); err != nil {
+			return 0, err
+		}
+	}
+	earnings, err := s.AdMob.Earnings(ctx, fresh, in.Account, today.AddDate(0, 0, -29), today)
+	if err != nil {
+		return 0, err
+	}
+	for _, e := range earnings {
+		if err := s.Store.SetAdRevenue(ctx, e.Product, e.Day, e.Paise); err != nil {
+			return 0, err
+		}
+	}
+	return len(earnings), nil
+}
+
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func (s *Server) syncIntegrations(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.SyncIntegrations(r.Context()))
+}
+
+// ---- SKUs (prices the server trusts for purchases) ----
+
+func (s *Server) skus(w http.ResponseWriter, r *http.Request) {
+	ks, err := s.Store.SKUs(r.Context())
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ks)
+}
+
+func (s *Server) saveSKU(w http.ResponseWriter, r *http.Request) {
+	var k store.SKU
+	if !decode(w, r, &k) {
+		return
+	}
+	if productID(k.ProductID) == "" || !lenBetween(k.SKU, 1, 100) || !oneOf(k.Kind, "pro", "tip", "subscription", "other") ||
+		k.PricePaise < 0 || k.PricePaise > 10000000 {
+		writeErr(w, http.StatusBadRequest, "product, sku, kind (pro, tip, subscription, other) and price_paise up to ₹1,00,000 are required")
+		return
+	}
+	if err := s.Store.SaveSKU(r.Context(), k); err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, k)
+}
+
+// eraseInstall handles a user's data deletion request (they read their install id from the app's Settings).
+func (s *Server) eraseInstall(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("install")
+	if !validInstall(id) {
+		writeErr(w, http.StatusBadRequest, "install id must be a UUID v4")
+		return
+	}
+	n, err := s.Store.EraseInstall(r.Context(), strings.ToLower(id))
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"erased_rows": n})
+}

@@ -67,6 +67,7 @@ type Dashboard struct {
 	Ads               AdsSummary         `json:"ads"`
 	Widgets           []Widget           `json:"widgets"`
 	Products          []DashProduct      `json:"products,omitempty"`
+	Vitals            *store.Vitals      `json:"vitals"` // latest Play crash and ANR rates; null for all or when unknown
 
 	activeBefore int64
 	last30       int64
@@ -257,6 +258,16 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			fail(w, r, err)
 			return
+		}
+		vs, err := s.Store.LatestVitals(ctx)
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		for i := range vs {
+			if vs[i].ProductID == p {
+				d.Vitals = &vs[i]
+			}
 		}
 		writeJSON(w, http.StatusOK, d)
 		return

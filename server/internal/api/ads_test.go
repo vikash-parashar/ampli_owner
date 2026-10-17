@@ -211,6 +211,78 @@ func TestAdsManagerFlow(t *testing.T) {
 		d.Revenue30d[29] != net || d.Ads.SpendPaise != 600000 || len(d.Widgets) != 2 {
 		t.Fatalf("dashboard = %+v", d)
 	}
+	if got.Attribution != "estimate" {
+		t.Fatalf("attribution = %q, want estimate (one install matched only by platform and time)", got.Attribution)
+	}
+
+	// A live losing campaign raises a high alert.
+	call(t, srv, "POST", "/v1/ads/campaigns/1/resume", true, nil, &c)
+	var alerts []api.Alert
+	call(t, srv, "GET", "/v1/alerts", true, nil, &alerts)
+	if len(alerts) == 0 || alerts[0].ID != "campaign-stop-1" || alerts[0].Severity != "high" {
+		t.Fatalf("alerts = %+v", alerts)
+	}
+
+	// Auto-stop pauses it on the platform at the next sync and logs why.
+	rule := map[string]any{"enabled": true, "min_roas": 0.5, "min_days": 5, "min_spend_paise": 200000}
+	if code := call(t, srv, "POST", "/v1/ads/campaigns/1/autostop", true, rule, &c); code != 200 || !c.AutoStop.Enabled || c.AutoStop.MinDays != 5 {
+		t.Fatalf("autostop: %d %+v", code, c.AutoStop)
+	}
+	if code := call(t, srv, "POST", "/v1/ads/campaigns/1/autostop", true, map[string]any{"enabled": true, "min_days": 1}, nil); code != 400 {
+		t.Fatalf("autostop min_days 1: %d", code)
+	}
+	if !fake.active["1001"] {
+		t.Fatal("resume did not reach the platform")
+	}
+	call(t, srv, "POST", "/v1/ads/sync?force=1", true, nil, nil)
+	call(t, srv, "GET", "/v1/ads/campaigns?product=mp3", true, nil, &list)
+	if list.Campaigns[0].Status != "paused" || fake.active["1001"] {
+		t.Fatalf("auto-stop did not pause: %+v", list.Campaigns[0])
+	}
+	var log []store.LogEntry
+	call(t, srv, "GET", "/v1/ads/campaigns/1/log", true, nil, &log)
+	if len(log) < 5 || log[0].Actor != "rule" || log[0].Action != "paused" {
+		t.Fatalf("log = %+v", log)
+	}
+
+	// Delete forgets it.
+	if code := call(t, srv, "DELETE", "/v1/ads/campaigns/1", true, nil, nil); code != 204 {
+		t.Fatalf("delete: %d", code)
+	}
+	if code := call(t, srv, "GET", "/v1/ads/campaigns/1/log", true, nil, &log); code != 200 || len(log) != 0 {
+		t.Fatalf("log after delete: %d %d", code, len(log))
+	}
+}
+
+func TestSKUsEraseAndTokenRotation(t *testing.T) {
+	srv, _ := newServerWith(t, func(s *api.Server) { s.OwnerTokenNext = "next-owner-token-0123456789abcdef" })
+	var ks []store.SKU
+	call(t, srv, "GET", "/v1/skus", true, nil, &ks)
+	if len(ks) < 10 {
+		t.Fatalf("seeded skus = %d", len(ks))
+	}
+	if code := call(t, srv, "PUT", "/v1/skus", true, map[string]any{"product": "carhub", "sku": "ampli_carhub_pro", "kind": "pro", "price_paise": 49900}, nil); code != 200 {
+		t.Fatalf("save sku: %d", code)
+	}
+	id := "12345678-1234-4234-8234-123456789abc"
+	call(t, srv, "POST", "/v1/public/reports", false, report("bug", id), nil)
+	var erased struct {
+		Rows int64 `json:"erased_rows"`
+	}
+	if code := call(t, srv, "DELETE", "/v1/installs/"+id, true, nil, &erased); code != 200 || erased.Rows == 0 {
+		t.Fatalf("erase: %d %+v", code, erased)
+	}
+	var mine []any
+	call(t, srv, "GET", "/v1/public/reports?install_id="+id, false, nil, &mine)
+	if len(mine) != 0 {
+		t.Fatalf("erased install still has %d tickets", len(mine))
+	}
+	if code := callH(t, srv, "GET", "/v1/alerts", false, map[string]string{"Authorization": "Bearer next-owner-token-0123456789abcdef"}, nil, nil); code != 200 {
+		t.Fatalf("next token: %d", code)
+	}
+	if code := callH(t, srv, "GET", "/v1/alerts", false, map[string]string{"Authorization": "Bearer wrong"}, nil, nil); code != 401 {
+		t.Fatalf("wrong token: %d", code)
+	}
 }
 
 func TestDashboardAllAndReviews(t *testing.T) {

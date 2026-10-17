@@ -23,6 +23,7 @@ type platformView struct {
 	Name       string            `json:"name"`
 	Sub        string            `json:"sub"`
 	Configured bool              `json:"configured"`
+	MinBudget  int64             `json:"min_daily_budget_paise"`
 	Accounts   []store.AdAccount `json:"accounts"`
 }
 
@@ -42,7 +43,7 @@ func (s *Server) adPlatforms(w http.ResponseWriter, r *http.Request) {
 	out := make([]platformView, 0, len(platformOrder))
 	for _, id := range platformOrder {
 		v := platformView{ID: id, Name: map[string]string{"meta": "Meta", "tiktok": "TikTok", "google": "Google Ads"}[id],
-			Sub: platformSub[id], Accounts: []store.AdAccount{}}
+			Sub: platformSub[id], MinBudget: ads.MinDailyBudgetPaise[id], Accounts: []store.AdAccount{}}
 		if p := s.platform(id); p != nil {
 			v.Configured = p.Configured() && s.Box != nil && s.PublicURL != ""
 		}
@@ -82,13 +83,10 @@ func (s *Server) connectAds(w http.ResponseWriter, r *http.Request) {
 func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("platform")
 	q := r.URL.Query()
-	page := func(code int, title, msg string) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(code)
-		fmt.Fprintf(w, `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ampli Owner</title>
-<body style="font-family:system-ui;background:#F4F2FB;color:#17132B;display:grid;place-items:center;min-height:90vh;margin:0;padding:16px;text-align:center">
-<div><div style="font-size:44px">%s</div><h2>%s</h2><p style="color:#6B6585">%s</p></div></body>`,
-			map[bool]string{true: "✅", false: "⚠️"}[code == 200], html.EscapeString(title), html.EscapeString(msg))
+	page := func(code int, title, msg string) { oauthPage(w, code, title, msg) }
+	if id == "admob" {
+		s.admobCallback(r, page)
+		return
 	}
 	p := s.platform(id)
 	if p == nil || s.Box == nil {
@@ -269,6 +267,10 @@ func (s *Server) createAdCampaign(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
+	if min := ads.MinDailyBudgetPaise[acct.Platform]; q.DailyBudgetPaise < min {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("%s needs at least %s a day", p.Name(), rupees(min)))
+		return
+	}
 	prods, err := s.Store.Products(ctx)
 	if err != nil {
 		fail(w, r, err)
@@ -312,6 +314,11 @@ func (s *Server) createAdCampaign(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, err)
 		return
 	}
+	detail := fmt.Sprintf("%s a day, %s", rupees(q.DailyBudgetPaise), strings.Join(q.Countries, ", "))
+	if lastErr != "" {
+		detail += "; failed: " + lastErr
+	}
+	_ = s.Store.LogCampaign(ctx, id, "owner", map[bool]string{true: "created and launched", false: "created paused"}[q.Launch], detail)
 	c, err := s.Store.Campaign(ctx, id)
 	if err != nil {
 		fail(w, r, err)
@@ -327,6 +334,10 @@ func (s *Server) campaignAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	action := r.PathValue("action")
+	if action == "autostop" {
+		s.setAutoStop(w, r, id)
+		return
+	}
 	var body struct {
 		DailyBudgetPaise int64 `json:"daily_budget_paise"`
 	}
@@ -346,6 +357,10 @@ func (s *Server) campaignAction(w http.ResponseWriter, r *http.Request) {
 	c, err := s.Store.Campaign(ctx, id)
 	if err != nil {
 		fail(w, r, err)
+		return
+	}
+	if min := ads.MinDailyBudgetPaise[c.Platform]; action == "budget" && body.DailyBudgetPaise < min {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("%s needs at least %s a day", c.Platform, rupees(min)))
 		return
 	}
 	remote := c.AdAccountID != nil && c.ExternalID != ""
@@ -383,11 +398,99 @@ func (s *Server) campaignAction(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, err)
 		return
 	}
+	switch action {
+	case "budget":
+		_ = s.Store.LogCampaign(ctx, id, "owner", "budget", fmt.Sprintf("%s → %s a day", rupees(c.DailyBudgetPaise), rupees(body.DailyBudgetPaise)))
+	default:
+		_ = s.Store.LogCampaign(ctx, id, "owner", map[string]string{"pause": "paused", "resume": "resumed"}[action], "")
+	}
 	if c, err = s.Store.Campaign(ctx, id); err != nil {
 		fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, c)
+}
+
+func (s *Server) setAutoStop(w http.ResponseWriter, r *http.Request, id int64) {
+	var a store.AutoStop
+	if !decode(w, r, &a) {
+		return
+	}
+	if a.MinROAS < 0 || a.MinROAS > 5 || a.MinDays < 3 || a.MinDays > 60 || a.MinSpendPaise < 0 || a.MinSpendPaise > 100000000 {
+		writeErr(w, http.StatusBadRequest, "min_roas 0 to 5, min_days 3 to 60, min_spend_paise up to ₹10,00,000")
+		return
+	}
+	ctx := r.Context()
+	if err := s.Store.SetAutoStop(ctx, id, a); err != nil {
+		fail(w, r, err)
+		return
+	}
+	detail := "off"
+	if a.Enabled {
+		detail = fmt.Sprintf("pause when ROAS < %.2fx after %d days and %s spent", a.MinROAS, a.MinDays, rupees(a.MinSpendPaise))
+	}
+	_ = s.Store.LogCampaign(ctx, id, "owner", "auto-stop", detail)
+	c, err := s.Store.Campaign(ctx, id)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+func (s *Server) campaignLog(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	log, err := s.Store.CampaignLog(r.Context(), id)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	if log == nil {
+		log = []store.LogEntry{}
+	}
+	writeJSON(w, http.StatusOK, log)
+}
+
+// deleteCampaign pauses the campaign on the platform first so nothing keeps spending, then forgets it.
+func (s *Server) deleteCampaign(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
+	c, err := s.Store.Campaign(ctx, id)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	if c.AdAccountID != nil && c.ExternalID != "" && oneOf(c.Status, "live", "in_review", "error") {
+		_, p, a, tok, err := s.account(ctx, *c.AdAccountID)
+		if err == nil {
+			err = p.SetActive(ctx, tok, a, ads.Ref{CampaignID: c.ExternalID, SetID: c.ExternalSetID}, false)
+		}
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, "could not pause it on "+c.Platform+" first: "+err.Error())
+			return
+		}
+	}
+	if err := s.Store.DeleteCampaign(ctx, id); err != nil {
+		fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// rupees formats paise as ₹1,234 (Indian grouping is not needed for these short labels).
+func rupees(paise int64) string {
+	r := paise / 100
+	s := fmt.Sprintf("%d", r)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return "₹" + s
 }
 
 // SyncAds pulls the last 30 days of numbers from every connected account. Accounts synced in the
@@ -431,6 +534,7 @@ func (s *Server) SyncAds(ctx context.Context, force bool) (int, []string) {
 					return err
 				}
 			}
+			s.applyAutoStop(ctx, acct.ID, p, a, tok)
 			return nil
 		}()
 		if err != nil {
@@ -448,7 +552,40 @@ func (s *Server) SyncAds(ctx context.Context, force bool) (int, []string) {
 	return synced, problems
 }
 
+// applyAutoStop pauses live campaigns whose auto-stop rule is met, on the platform first.
+func (s *Server) applyAutoStop(ctx context.Context, accountID int64, p ads.Platform, a ads.Account, tok ads.Token) {
+	cs, err := s.Store.Campaigns(ctx, "")
+	if err != nil {
+		return
+	}
+	for _, c := range cs {
+		r := c.AutoStop
+		if c.AdAccountID == nil || *c.AdAccountID != accountID || c.ExternalID == "" || c.Status != "live" || !r.Enabled ||
+			c.Days < r.MinDays || c.SpendPaise < r.MinSpendPaise || c.ROAS >= r.MinROAS {
+			continue
+		}
+		detail := fmt.Sprintf("ROAS %.2fx after %d days and %s spent (rule: below %.2fx)", c.ROAS, c.Days, rupees(c.SpendPaise), r.MinROAS)
+		if err := p.SetActive(ctx, tok, a, ads.Ref{CampaignID: c.ExternalID, SetID: c.ExternalSetID}, false); err != nil {
+			_ = s.Store.SetCampaignStatus(ctx, c.ID, c.Status, "auto-stop could not pause: "+err.Error())
+			_ = s.Store.LogCampaign(ctx, c.ID, "rule", "pause failed", err.Error())
+			continue
+		}
+		_ = s.Store.SetCampaignStatus(ctx, c.ID, "paused", "")
+		_ = s.Store.LogCampaign(ctx, c.ID, "rule", "paused", detail)
+		slog.Info("auto-stop paused campaign", "campaign", c.ID, "detail", detail)
+	}
+}
+
 func (s *Server) syncAds(w http.ResponseWriter, r *http.Request) {
 	n, problems := s.SyncAds(r.Context(), r.URL.Query().Get("force") == "1")
 	writeJSON(w, http.StatusOK, map[string]any{"synced": n, "errors": problems})
+}
+
+func oauthPage(w http.ResponseWriter, code int, title, msg string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	fmt.Fprintf(w, `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ampli Owner</title>
+<body style="font-family:system-ui;background:#F4F2FB;color:#17132B;display:grid;place-items:center;min-height:90vh;margin:0;padding:16px;text-align:center">
+<div><div style="font-size:44px">%s</div><h2>%s</h2><p style="color:#6B6585">%s</p></div></body>`,
+		map[bool]string{true: "✅", false: "⚠️"}[code == 200], html.EscapeString(title), html.EscapeString(msg))
 }
