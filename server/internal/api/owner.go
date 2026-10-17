@@ -212,7 +212,7 @@ func (s *Server) createTodo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !lenBetween(t.Title, 1, 200) || !validDate(t.Due) || (t.ProductID != nil && productID(*t.ProductID) == "") {
-		writeErr(w, http.StatusBadRequest, "title is required; due is YYYY-MM-DD; product is mp3 or carhub")
+		writeErr(w, http.StatusBadRequest, "title is required; due is YYYY-MM-DD; product is mp3, carhub or naukri")
 		return
 	}
 	if t.Due != nil && *t.Due == "" {
@@ -308,48 +308,6 @@ func (s *Server) patchFeature(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, f)
-}
-
-// ---- campaigns ----
-
-func (s *Server) campaigns(w http.ResponseWriter, r *http.Request) {
-	cs, err := s.Store.Campaigns(r.Context())
-	if err != nil {
-		fail(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, cs)
-}
-
-func (s *Server) saveCampaign(w http.ResponseWriter, r *http.Request) {
-	var c store.Campaign
-	if !decode(w, r, &c) {
-		return
-	}
-	c.ID = 0
-	if r.PathValue("id") != "" {
-		id, ok := pathID(w, r)
-		if !ok {
-			return
-		}
-		c.ID = id
-	}
-	if !oneOf(c.Platform, "instagram", "facebook", "youtube", "google", "other") || !lenBetween(c.Name, 1, 200) ||
-		(c.Status != "" && !oneOf(c.Status, "draft", "scheduled", "live", "ended")) ||
-		(c.ProductID != nil && productID(*c.ProductID) == "") || !validDate(c.StartsOn) || !validDate(c.EndsOn) {
-		writeErr(w, http.StatusBadRequest, "platform, name are required; status draft|scheduled|live|ended; dates YYYY-MM-DD")
-		return
-	}
-	code := http.StatusOK
-	if c.ID == 0 {
-		code = http.StatusCreated
-	}
-	c, err := s.Store.SaveCampaign(r.Context(), c)
-	if err != nil {
-		fail(w, r, err)
-		return
-	}
-	writeJSON(w, code, c)
 }
 
 // ---- stats ----

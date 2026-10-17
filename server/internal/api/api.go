@@ -13,6 +13,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/vikash-parashar/ampli_owner/server/internal/ads"
+	"github.com/vikash-parashar/ampli_owner/server/internal/play"
+	"github.com/vikash-parashar/ampli_owner/server/internal/secret"
 	"github.com/vikash-parashar/ampli_owner/server/internal/store"
 )
 
@@ -23,6 +26,12 @@ type Server struct {
 	Store      *store.Store
 	OwnerToken string
 	Now        func() time.Time
+
+	// Ads manager and Play reviews; all optional.
+	Box       *secret.Box             // encrypts ad tokens (TOKEN_KEY)
+	PublicURL string                  // where the platforms send the browser back, e.g. https://abc.lambda-url.ap-south-1.on.aws
+	Platforms map[string]ads.Platform // meta, tiktok, google
+	Play      *play.Client
 }
 
 func (s *Server) Handler() http.Handler {
@@ -37,6 +46,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/public/reports", s.myReports)
 	mux.HandleFunc("GET /v1/public/features", s.publicFeatures)
 	mux.HandleFunc("POST /v1/public/features/{id}/vote", s.vote)
+	mux.HandleFunc("POST /v1/public/installs", s.publicInstall)
+	mux.HandleFunc("POST /v1/public/purchases", s.publicPurchase)
+	mux.HandleFunc("POST /v1/public/events", s.publicEvents)
+	mux.HandleFunc("GET /oauth/{platform}/callback", s.oauthCallback)
 
 	// Owner only.
 	owner := http.NewServeMux()
@@ -56,11 +69,20 @@ func (s *Server) Handler() http.Handler {
 	owner.HandleFunc("GET /v1/features", s.features)
 	owner.HandleFunc("POST /v1/features", s.createFeature)
 	owner.HandleFunc("PATCH /v1/features/{id}", s.patchFeature)
-	owner.HandleFunc("GET /v1/campaigns", s.campaigns)
-	owner.HandleFunc("POST /v1/campaigns", s.saveCampaign)
-	owner.HandleFunc("PUT /v1/campaigns/{id}", s.saveCampaign)
 	owner.HandleFunc("GET /v1/stats", s.stats)
 	owner.HandleFunc("PUT /v1/stats", s.putStats)
+	owner.HandleFunc("GET /v1/dashboard", s.dashboard)
+	owner.HandleFunc("GET /v1/ads/platforms", s.adPlatforms)
+	owner.HandleFunc("POST /v1/ads/connect/{platform}", s.connectAds)
+	owner.HandleFunc("DELETE /v1/ads/accounts/{id}", s.deleteAdAccount)
+	owner.HandleFunc("GET /v1/ads/campaigns", s.adCampaigns)
+	owner.HandleFunc("POST /v1/ads/campaigns", s.createAdCampaign)
+	owner.HandleFunc("POST /v1/ads/campaigns/{id}/{action}", s.campaignAction)
+	owner.HandleFunc("POST /v1/ads/sync", s.syncAds)
+	owner.HandleFunc("GET /v1/reviews", s.reviews)
+	owner.HandleFunc("POST /v1/reviews", s.addReview)
+	owner.HandleFunc("POST /v1/reviews/{id}/reply", s.replyReview)
+	owner.HandleFunc("POST /v1/reviews/sync", s.syncReviews)
 	owner.HandleFunc("GET /v1/guides", s.guides)
 	owner.HandleFunc("PUT /v1/guides/{id}", s.saveGuide)
 	mux.Handle("/v1/", s.requireOwner(owner))
@@ -159,10 +181,10 @@ func lenBetween(s string, min, max int) bool {
 	return n >= min && n <= max
 }
 
-// productID accepts the app-facing names ("mp3", "carhub").
+// productID accepts the app-facing names ("mp3", "carhub", "naukri").
 func productID(p string) string {
 	switch p {
-	case "mp3", "carhub":
+	case "mp3", "carhub", "naukri":
 		return p
 	}
 	return ""

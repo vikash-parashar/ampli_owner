@@ -1,0 +1,316 @@
+package store
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/vikash-parashar/ampli_owner/server/internal/ads"
+)
+
+// ---- ad accounts ----
+
+type AdAccount struct {
+	ID         int64      `json:"id"`
+	Platform   string     `json:"platform"`
+	ExternalID string     `json:"external_id"`
+	Name       string     `json:"name"`
+	Currency   string     `json:"currency"`
+	Status     string     `json:"status"`
+	LastSyncAt *time.Time `json:"last_sync_at"`
+	LastError  string     `json:"last_error"`
+	CreatedAt  time.Time  `json:"created_at"`
+}
+
+// SealedToken is an encrypted access/refresh token pair.
+type SealedToken struct {
+	Access  []byte
+	Refresh []byte
+	Expires *time.Time
+}
+
+const accountCols = `id, platform, external_id, name, currency, status, last_sync_at, last_error, created_at`
+
+func scanAccount(r pgx.Row, extra ...any) (AdAccount, error) {
+	var a AdAccount
+	err := r.Scan(append([]any{&a.ID, &a.Platform, &a.ExternalID, &a.Name, &a.Currency, &a.Status, &a.LastSyncAt, &a.LastError, &a.CreatedAt}, extra...)...)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return a, ErrNotFound
+	}
+	return a, err
+}
+
+// SaveAdAccount adds or reconnects an account.
+func (s *Store) SaveAdAccount(ctx context.Context, platform string, a ads.Account, t SealedToken) (AdAccount, error) {
+	return scanAccount(s.DB.QueryRow(ctx, `INSERT INTO ad_accounts (platform, external_id, name, currency, token_enc, refresh_enc, expires_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (platform, external_id) DO UPDATE SET name=EXCLUDED.name, currency=EXCLUDED.currency, token_enc=EXCLUDED.token_enc,
+			refresh_enc=COALESCE(EXCLUDED.refresh_enc, ad_accounts.refresh_enc), expires_at=EXCLUDED.expires_at, status='connected', last_error=''
+		RETURNING `+accountCols, platform, a.ExternalID, a.Name, a.Currency, t.Access, t.Refresh, t.Expires))
+}
+
+func (s *Store) AdAccounts(ctx context.Context) ([]AdAccount, error) {
+	rows, err := s.DB.Query(ctx, `SELECT `+accountCols+` FROM ad_accounts ORDER BY platform, name`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (AdAccount, error) { return scanAccount(r) })
+}
+
+func (s *Store) AdAccountToken(ctx context.Context, id int64) (AdAccount, SealedToken, error) {
+	var t SealedToken
+	a, err := scanAccount(s.DB.QueryRow(ctx, `SELECT `+accountCols+`, token_enc, refresh_enc, expires_at FROM ad_accounts WHERE id=$1`, id),
+		&t.Access, &t.Refresh, &t.Expires)
+	return a, t, err
+}
+
+func (s *Store) UpdateAdAccountToken(ctx context.Context, id int64, t SealedToken) error {
+	_, err := s.DB.Exec(ctx, `UPDATE ad_accounts SET token_enc=$2, expires_at=$3 WHERE id=$1`, id, t.Access, t.Expires)
+	return err
+}
+
+// MarkAdAccount records the outcome of a sync or call. synced also stamps last_sync_at.
+func (s *Store) MarkAdAccount(ctx context.Context, id int64, status, lastErr string, synced bool) error {
+	_, err := s.DB.Exec(ctx, `UPDATE ad_accounts SET status=$2, last_error=$3,
+		last_sync_at = CASE WHEN $4 THEN now() ELSE last_sync_at END WHERE id=$1`, id, status, lastErr, synced)
+	return err
+}
+
+func (s *Store) DeleteAdAccount(ctx context.Context, id int64) error {
+	tag, err := s.DB.Exec(ctx, `DELETE FROM ad_accounts WHERE id=$1`, id)
+	if err == nil && tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return err
+}
+
+// ---- campaigns ----
+
+type Campaign struct {
+	ID                 int64       `json:"id"`
+	Platform           string      `json:"platform"`
+	ProductID          string      `json:"product"`
+	Name               string      `json:"name"`
+	Status             string      `json:"status"`
+	Countries          []string    `json:"countries"`
+	DailyBudgetPaise   int64       `json:"daily_budget_paise"`
+	SpendPaise         int64       `json:"spend_paise"`
+	Impressions        int64       `json:"impressions"`
+	Clicks             int64       `json:"clicks"`
+	Installs           int64       `json:"installs"`
+	AttributedInstalls int64       `json:"attributed_installs"`
+	RevenuePaise       int64       `json:"revenue_paise"`
+	ROAS               float64     `json:"roas"`
+	CPIPaise           int64       `json:"cpi_paise"`
+	Days               int         `json:"days"`
+	Verdict            ads.Verdict `json:"verdict"`
+	AdAccountID        *int64      `json:"ad_account_id"`
+	UTMCampaign        string      `json:"utm_campaign"`
+	CreativeURL        string      `json:"creative_url"`
+	LastError          string      `json:"last_error"`
+	CreatedAt          time.Time   `json:"created_at"`
+	ExternalID         string      `json:"-"`
+	ExternalSetID      string      `json:"-"`
+	manualRevenue      int64
+}
+
+// attribution assigns each ad install to one campaign: by our own utm_campaign link first,
+// otherwise to the newest campaign on the same platform for the same app that started before the install.
+const attribution = `
+WITH att AS (
+  SELECT i.product_id, i.install_id, COALESCE(
+    (SELECT c.id FROM campaigns c WHERE i.utm_campaign <> '' AND c.utm_campaign = i.utm_campaign),
+    (SELECT c.id FROM campaigns c WHERE i.ad_platform <> '' AND c.platform = i.ad_platform AND c.product_id = i.product_id
+       AND c.created_at <= i.created_at AND c.status <> 'draft' ORDER BY c.created_at DESC, c.id DESC LIMIT 1)) AS campaign_id
+  FROM installs i WHERE i.ad_platform <> '' OR i.utm_campaign LIKE 'ampli-c%'
+), per AS (
+  SELECT att.campaign_id, count(*) AS installs, COALESCE(sum(p.amt), 0)::bigint AS revenue
+  FROM att LEFT JOIN (SELECT product_id, install_id, sum(amount_paise) AS amt FROM purchases GROUP BY 1, 2) p
+    ON p.product_id = att.product_id AND p.install_id = att.install_id
+  WHERE att.campaign_id IS NOT NULL GROUP BY 1
+)`
+
+const campaignSelect = attribution + `
+SELECT c.id, c.platform, COALESCE(c.product_id, ''), c.name, c.status, c.countries, c.daily_budget_paise, c.spend_paise,
+  c.impressions, c.clicks, c.installs, c.revenue_paise, c.ad_account_id, COALESCE(c.utm_campaign, ''), c.creative_url, c.last_error,
+  c.created_at, c.external_id, c.external_set_id,
+  (SELECT count(*) FROM campaign_days d WHERE d.campaign_id = c.id AND d.spend_paise > 0)::int,
+  COALESCE(per.installs, 0), COALESCE(per.revenue, 0)
+FROM campaigns c LEFT JOIN per ON per.campaign_id = c.id`
+
+func scanCampaign(r pgx.Row) (Campaign, error) {
+	var c Campaign
+	var attrRev int64
+	err := r.Scan(&c.ID, &c.Platform, &c.ProductID, &c.Name, &c.Status, &c.Countries, &c.DailyBudgetPaise, &c.SpendPaise,
+		&c.Impressions, &c.Clicks, &c.Installs, &c.manualRevenue, &c.AdAccountID, &c.UTMCampaign, &c.CreativeURL, &c.LastError,
+		&c.CreatedAt, &c.ExternalID, &c.ExternalSetID, &c.Days, &c.AttributedInstalls, &attrRev)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return c, ErrNotFound
+	}
+	if err != nil {
+		return c, err
+	}
+	c.RevenuePaise = attrRev + c.manualRevenue
+	if c.Installs == 0 {
+		c.Installs = c.AttributedInstalls
+	}
+	if c.SpendPaise > 0 {
+		c.ROAS = float64(c.RevenuePaise) / float64(c.SpendPaise)
+	}
+	if c.Installs > 0 {
+		c.CPIPaise = c.SpendPaise / c.Installs
+	}
+	if c.Countries == nil {
+		c.Countries = []string{}
+	}
+	c.Verdict = ads.Judge(c.Status, c.SpendPaise, c.RevenuePaise, c.Days)
+	return c, nil
+}
+
+// Campaigns lists campaigns for one product, or all when product is "".
+func (s *Store) Campaigns(ctx context.Context, product string) ([]Campaign, error) {
+	rows, err := s.DB.Query(ctx, campaignSelect+` WHERE ($1 = '' OR c.product_id = $1) ORDER BY c.created_at DESC, c.id DESC`, product)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Campaign, error) { return scanCampaign(r) })
+}
+
+func (s *Store) Campaign(ctx context.Context, id int64) (Campaign, error) {
+	return scanCampaign(s.DB.QueryRow(ctx, campaignSelect+` WHERE c.id = $1`, id))
+}
+
+// NewCampaign is the row written before the platform call.
+type NewCampaign struct {
+	Platform         string
+	ProductID        string
+	AdAccountID      int64
+	Name             string
+	Countries        []string
+	DailyBudgetPaise int64
+	CreativeURL      string
+	EndsOn           *string
+}
+
+func (s *Store) InsertCampaign(ctx context.Context, n NewCampaign) (int64, error) {
+	var id int64
+	err := pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `INSERT INTO campaigns (platform, product_id, ad_account_id, name, status, countries, daily_budget_paise,
+			budget_paise, creative_url, starts_on, ends_on) VALUES ($1,$2,$3,$4,'draft',$5,$6,$6,$7,current_date,$8::date) RETURNING id`,
+			n.Platform, n.ProductID, n.AdAccountID, n.Name, n.Countries, n.DailyBudgetPaise, n.CreativeURL, n.EndsOn).Scan(&id); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `UPDATE campaigns SET utm_campaign = 'ampli-c' || id WHERE id = $1`, id)
+		return err
+	})
+	return id, err
+}
+
+// SetCampaignRemote stores the platform ids and the resulting status.
+func (s *Store) SetCampaignRemote(ctx context.Context, id int64, ref ads.Ref, status, lastErr string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE campaigns SET external_id=$2, external_set_id=$3, status=$4, last_error=$5 WHERE id=$1`,
+		id, ref.CampaignID, ref.SetID, status, lastErr)
+	return err
+}
+
+func (s *Store) SetCampaignStatus(ctx context.Context, id int64, status, lastErr string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE campaigns SET status=$2, last_error=$3 WHERE id=$1`, id, status, lastErr)
+	return err
+}
+
+func (s *Store) SetCampaignBudget(ctx context.Context, id int64, paise int64) error {
+	_, err := s.DB.Exec(ctx, `UPDATE campaigns SET daily_budget_paise=$2, budget_paise=$2, last_error='' WHERE id=$1`, id, paise)
+	return err
+}
+
+// CampaignIDs maps platform campaign ids to ours for one ad account.
+func (s *Store) CampaignIDs(ctx context.Context, accountID int64) (map[string]int64, error) {
+	rows, err := s.DB.Query(ctx, `SELECT external_id, id FROM campaigns WHERE ad_account_id=$1 AND external_id <> ''`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := map[string]int64{}
+	for rows.Next() {
+		var ext string
+		var id int64
+		if err := rows.Scan(&ext, &id); err != nil {
+			return nil, err
+		}
+		m[ext] = id
+	}
+	return m, rows.Err()
+}
+
+// SaveCampaignDays upserts daily numbers and refreshes the campaign totals.
+func (s *Store) SaveCampaignDays(ctx context.Context, campaignID int64, days []ads.DayInsight) error {
+	return pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
+		for _, d := range days {
+			if _, err := tx.Exec(ctx, `INSERT INTO campaign_days (campaign_id, day, spend_paise, impressions, clicks, installs)
+				VALUES ($1,$2::date,$3,$4,$5,$6) ON CONFLICT (campaign_id, day) DO UPDATE SET spend_paise=EXCLUDED.spend_paise,
+				impressions=EXCLUDED.impressions, clicks=EXCLUDED.clicks, installs=EXCLUDED.installs`,
+				campaignID, d.Day, d.SpendPaise, d.Impressions, d.Clicks, d.Installs); err != nil {
+				return err
+			}
+		}
+		_, err := tx.Exec(ctx, `UPDATE campaigns c SET spend_paise=t.spend, impressions=t.imp, clicks=t.clk, installs=t.inst,
+			synced_at=now(), status = CASE WHEN c.status='in_review' AND t.spend > 0 THEN 'live' ELSE c.status END
+			FROM (SELECT COALESCE(sum(spend_paise),0) spend, COALESCE(sum(impressions),0) imp, COALESCE(sum(clicks),0) clk,
+				COALESCE(sum(installs),0) inst FROM campaign_days WHERE campaign_id=$1) t WHERE c.id=$1`, campaignID)
+		return err
+	})
+}
+
+// ---- attribution and app signals (public endpoints) ----
+
+type Install struct {
+	ProductID, InstallID, AppVersion, Country, RawReferrer string
+	Ref                                                    ads.Referrer
+}
+
+func (s *Store) SaveInstall(ctx context.Context, in Install) (bool, error) {
+	tag, err := s.DB.Exec(ctx, `INSERT INTO installs (product_id, install_id, utm_source, utm_medium, utm_campaign, utm_content,
+		ad_platform, referrer, app_version, country) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING`,
+		in.ProductID, in.InstallID, in.Ref.Source, in.Ref.Medium, in.Ref.Campaign, in.Ref.Content, in.Ref.Platform,
+		in.RawReferrer, in.AppVersion, in.Country)
+	return err == nil && tag.RowsAffected() == 1, err
+}
+
+type Purchase struct {
+	ProductID   string `json:"product"`
+	InstallID   string `json:"install_id"`
+	Kind        string `json:"kind"`
+	SKU         string `json:"sku"`
+	AmountPaise int64  `json:"amount_paise"`
+	Currency    string `json:"currency"`
+	OrderID     string `json:"order_id"`
+}
+
+func (s *Store) SavePurchase(ctx context.Context, p Purchase) (bool, error) {
+	tag, err := s.DB.Exec(ctx, `INSERT INTO purchases (product_id, install_id, kind, sku, amount_paise, currency, order_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (order_id) DO NOTHING`,
+		p.ProductID, p.InstallID, p.Kind, p.SKU, p.AmountPaise, p.Currency, p.OrderID)
+	return err == nil && tag.RowsAffected() == 1, err
+}
+
+func (s *Store) AddEvents(ctx context.Context, product string, day time.Time, names []string) error {
+	return pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
+		for _, n := range names {
+			if _, err := tx.Exec(ctx, `INSERT INTO app_events (product_id, day, name, count) VALUES ($1,$2,$3,1)
+				ON CONFLICT (product_id, day, name) DO UPDATE SET count = app_events.count + 1`, product, day, n); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// Hit counts one public call for an install today and reports whether it is within limit.
+func (s *Store) Hit(ctx context.Context, installID string, day time.Time, limit int) (bool, error) {
+	var n int
+	err := s.DB.QueryRow(ctx, `INSERT INTO public_hits (install_id, day, hits) VALUES ($1,$2,1)
+		ON CONFLICT (install_id, day) DO UPDATE SET hits = public_hits.hits + 1 RETURNING hits`, installID, day).Scan(&n)
+	return n <= limit, err
+}

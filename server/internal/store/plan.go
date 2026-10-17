@@ -198,62 +198,6 @@ func (s *Store) SeedFeatures(ctx context.Context, fs []Feature) (int, error) {
 	return added, err
 }
 
-// ---- campaigns ----
-
-type Campaign struct {
-	ID          int64   `json:"id"`
-	Platform    string  `json:"platform"`
-	ProductID   *string `json:"product"`
-	Name        string  `json:"name"`
-	Status      string  `json:"status"`
-	BudgetPaise int64   `json:"budget_paise"`
-	SpendPaise  int64   `json:"spend_paise"`
-	Impressions int64   `json:"impressions"`
-	Clicks      int64   `json:"clicks"`
-	Installs    int64   `json:"installs"`
-	PostURL     string  `json:"post_url"`
-	StartsOn    *string `json:"starts_on"`
-	EndsOn      *string `json:"ends_on"`
-}
-
-const campaignCols = `id, platform, product_id, name, status, budget_paise, spend_paise, impressions, clicks, installs, post_url,
-	to_char(starts_on, 'YYYY-MM-DD'), to_char(ends_on, 'YYYY-MM-DD')`
-
-func scanCampaign(r pgx.Row) (Campaign, error) {
-	var c Campaign
-	err := r.Scan(&c.ID, &c.Platform, &c.ProductID, &c.Name, &c.Status, &c.BudgetPaise, &c.SpendPaise, &c.Impressions,
-		&c.Clicks, &c.Installs, &c.PostURL, &c.StartsOn, &c.EndsOn)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return c, ErrNotFound
-	}
-	return c, err
-}
-
-func (s *Store) Campaigns(ctx context.Context) ([]Campaign, error) {
-	rows, err := s.DB.Query(ctx, `SELECT `+campaignCols+` FROM campaigns ORDER BY starts_on DESC NULLS FIRST, id DESC`)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Campaign, error) { return scanCampaign(r) })
-}
-
-// SaveCampaign inserts when ID is 0, otherwise replaces the row.
-func (s *Store) SaveCampaign(ctx context.Context, c Campaign) (Campaign, error) {
-	if c.Status == "" {
-		c.Status = "draft"
-	}
-	if c.ID == 0 {
-		return scanCampaign(s.DB.QueryRow(ctx, `INSERT INTO campaigns (platform, product_id, name, status, budget_paise, spend_paise,
-			impressions, clicks, installs, post_url, starts_on, ends_on) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::date,$12::date)
-			RETURNING `+campaignCols, c.Platform, c.ProductID, c.Name, c.Status, c.BudgetPaise, c.SpendPaise, c.Impressions,
-			c.Clicks, c.Installs, c.PostURL, c.StartsOn, c.EndsOn))
-	}
-	return scanCampaign(s.DB.QueryRow(ctx, `UPDATE campaigns SET platform=$2, product_id=$3, name=$4, status=$5, budget_paise=$6,
-		spend_paise=$7, impressions=$8, clicks=$9, installs=$10, post_url=$11, starts_on=$12::date, ends_on=$13::date
-		WHERE id=$1 RETURNING `+campaignCols, c.ID, c.Platform, c.ProductID, c.Name, c.Status, c.BudgetPaise, c.SpendPaise,
-		c.Impressions, c.Clicks, c.Installs, c.PostURL, c.StartsOn, c.EndsOn))
-}
-
 // ---- daily stats ----
 
 type DayStat struct {
@@ -267,21 +211,25 @@ type DayStat struct {
 	ProSales        int      `json:"pro_sales"`
 	ProRevenuePaise int64    `json:"pro_revenue_paise"`
 	AdRevenuePaise  int64    `json:"ad_revenue_paise"`
+	TipsPaise       int64    `json:"tips_paise"`
+	OtherPaise      int64    `json:"other_revenue_paise"`
 }
 
 func (s *Store) UpsertStat(ctx context.Context, d DayStat) error {
 	_, err := s.DB.Exec(ctx, `INSERT INTO daily_stats (product_id, day, installs, uninstalls, active_users, rating, reviews,
-		pro_sales, pro_revenue_paise, ad_revenue_paise) VALUES ($1,$2::date,$3,$4,$5,$6,$7,$8,$9,$10)
+		pro_sales, pro_revenue_paise, ad_revenue_paise, tips_paise, other_revenue_paise) VALUES ($1,$2::date,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 		ON CONFLICT (product_id, day) DO UPDATE SET installs=EXCLUDED.installs, uninstalls=EXCLUDED.uninstalls,
 		active_users=EXCLUDED.active_users, rating=EXCLUDED.rating, reviews=EXCLUDED.reviews, pro_sales=EXCLUDED.pro_sales,
-		pro_revenue_paise=EXCLUDED.pro_revenue_paise, ad_revenue_paise=EXCLUDED.ad_revenue_paise`,
-		d.ProductID, d.Day, d.Installs, d.Uninstalls, d.ActiveUsers, d.Rating, d.Reviews, d.ProSales, d.ProRevenuePaise, d.AdRevenuePaise)
+		pro_revenue_paise=EXCLUDED.pro_revenue_paise, ad_revenue_paise=EXCLUDED.ad_revenue_paise,
+		tips_paise=EXCLUDED.tips_paise, other_revenue_paise=EXCLUDED.other_revenue_paise`,
+		d.ProductID, d.Day, d.Installs, d.Uninstalls, d.ActiveUsers, d.Rating, d.Reviews, d.ProSales, d.ProRevenuePaise, d.AdRevenuePaise,
+		d.TipsPaise, d.OtherPaise)
 	return err
 }
 
 func (s *Store) Stats(ctx context.Context, product, from, to string) ([]DayStat, error) {
 	rows, err := s.DB.Query(ctx, `SELECT product_id, to_char(day, 'YYYY-MM-DD'), installs, uninstalls, active_users, rating::float8,
-		reviews, pro_sales, pro_revenue_paise, ad_revenue_paise FROM daily_stats
+		reviews, pro_sales, pro_revenue_paise, ad_revenue_paise, tips_paise, other_revenue_paise FROM daily_stats
 		WHERE ($1 = '' OR product_id = $1) AND day BETWEEN $2::date AND $3::date ORDER BY day, product_id`, product, from, to)
 	if err != nil {
 		return nil, err
@@ -289,7 +237,7 @@ func (s *Store) Stats(ctx context.Context, product, from, to string) ([]DayStat,
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (DayStat, error) {
 		var d DayStat
 		return d, r.Scan(&d.ProductID, &d.Day, &d.Installs, &d.Uninstalls, &d.ActiveUsers, &d.Rating, &d.Reviews,
-			&d.ProSales, &d.ProRevenuePaise, &d.AdRevenuePaise)
+			&d.ProSales, &d.ProRevenuePaise, &d.AdRevenuePaise, &d.TipsPaise, &d.OtherPaise)
 	})
 }
 

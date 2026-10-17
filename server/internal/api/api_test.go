@@ -20,6 +20,13 @@ const token = "test-owner-token-0123456789abcdef"
 // newServer needs TEST_DATABASE_URL pointing at a throwaway database; every table is wiped.
 func newServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	srv, _ := newServerWith(t, nil)
+	return srv
+}
+
+// newServerWith lets a test add ad platforms, a token box or a fixed clock.
+func newServerWith(t *testing.T, configure func(*api.Server)) (*httptest.Server, *store.Store) {
+	t.Helper()
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL not set")
@@ -34,12 +41,17 @@ func newServer(t *testing.T) *httptest.Server {
 		t.Fatal(err)
 	}
 	if _, err := st.DB.Exec(ctx, `TRUNCATE tickets, ticket_messages, feature_votes, features, checklist_items, todos,
-		builds, daily_stats, campaigns, guides RESTART IDENTITY CASCADE`); err != nil {
+		builds, daily_stats, campaigns, guides, ad_accounts, campaign_days, installs, purchases, reviews, app_events,
+		public_hits RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer((&api.Server{Store: st, OwnerToken: token}).Handler())
+	as := &api.Server{Store: st, OwnerToken: token}
+	if configure != nil {
+		configure(as)
+	}
+	srv := httptest.NewServer(as.Handler())
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, st
 }
 
 func call(t *testing.T, srv *httptest.Server, method, path string, auth bool, body any, out any) int {

@@ -27,7 +27,7 @@ type Report struct {
 func (rp Report) validate() string {
 	switch {
 	case productID(rp.Product) == "":
-		return "product must be mp3 or carhub"
+		return "product must be mp3, carhub or naukri"
 	case !oneOf(rp.Kind, "bug", "feature", "support", "feedback"):
 		return "kind must be bug, feature, support or feedback"
 	case !lenBetween(rp.Title, 3, 120):
@@ -119,7 +119,7 @@ type publicFeature struct {
 func (s *Server) publicFeatures(w http.ResponseWriter, r *http.Request) {
 	p := productID(r.URL.Query().Get("product"))
 	if p == "" {
-		writeErr(w, http.StatusBadRequest, "product must be mp3 or carhub")
+		writeErr(w, http.StatusBadRequest, "product must be mp3, carhub or naukri")
 		return
 	}
 	ts, err := s.Store.ListTickets(r.Context(), store.TicketFilter{Product: p, Kind: "feature", Limit: 50})
