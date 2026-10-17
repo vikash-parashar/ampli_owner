@@ -391,6 +391,9 @@ func (s *Server) campaignAction(w http.ResponseWriter, r *http.Request) {
 		err = s.Store.SetCampaignStatus(ctx, id, "paused", "")
 	case "resume":
 		err = s.Store.SetCampaignStatus(ctx, id, "live", "")
+		if err == nil && c.AutoStop.Enabled {
+			err = s.Store.HoldAutoStop(ctx, id, s.Now().Add(ResumeHold))
+		}
 	case "budget":
 		err = s.Store.SetCampaignBudget(ctx, id, body.DailyBudgetPaise)
 	}
@@ -552,25 +555,57 @@ func (s *Server) SyncAds(ctx context.Context, force bool) (int, []string) {
 	return synced, problems
 }
 
-// applyAutoStop pauses live campaigns whose auto-stop rule is met, on the platform first.
+// AutoStopConfirm is how long a campaign must stay below its auto-stop limit (two syncs this far apart) before
+// the rule pauses it; ResumeHold is how long the rule waits after the owner resumes a campaign by hand.
+const (
+	AutoStopConfirm = 24 * time.Hour
+	ResumeHold      = 72 * time.Hour
+)
+
+// applyAutoStop pauses live campaigns whose auto-stop rule is met, on the platform first. It never acts on
+// revenue it cannot see (no Play service account, or no installs matched to the campaign), waits after a
+// manual resume, and needs two below-limit syncs at least AutoStopConfirm apart.
 func (s *Server) applyAutoStop(ctx context.Context, accountID int64, p ads.Platform, a ads.Account, tok ads.Token) {
+	if s.Play == nil {
+		return // purchases are not verified, so revenue (and ROAS) would read as 0
+	}
 	cs, err := s.Store.Campaigns(ctx, "")
 	if err != nil {
 		return
 	}
+	now := s.Now()
 	for _, c := range cs {
 		r := c.AutoStop
-		if c.AdAccountID == nil || *c.AdAccountID != accountID || c.ExternalID == "" || c.Status != "live" || !r.Enabled ||
-			c.Days < r.MinDays || c.SpendPaise < r.MinSpendPaise || c.ROAS >= r.MinROAS {
+		if c.AdAccountID == nil || *c.AdAccountID != accountID || c.ExternalID == "" || c.Status != "live" || !r.Enabled {
+			continue
+		}
+		if r.HoldUntil != nil && now.Before(*r.HoldUntil) {
+			continue
+		}
+		below := c.Attribution != "none" && c.Days >= r.MinDays && c.SpendPaise >= r.MinSpendPaise && c.ROAS < r.MinROAS
+		if !below {
+			if r.PendingSince != nil {
+				_ = s.Store.SetAutoStrike(ctx, c.ID, nil)
+				_ = s.Store.LogCampaign(ctx, c.ID, "rule", "recovered", fmt.Sprintf("ROAS %.2fx, no longer below %.2fx", c.ROAS, r.MinROAS))
+			}
 			continue
 		}
 		detail := fmt.Sprintf("ROAS %.2fx after %d days and %s spent (rule: below %.2fx)", c.ROAS, c.Days, rupees(c.SpendPaise), r.MinROAS)
+		if r.PendingSince == nil {
+			_ = s.Store.SetAutoStrike(ctx, c.ID, &now)
+			_ = s.Store.LogCampaign(ctx, c.ID, "rule", "will pause", detail+"; pauses at the next sync after 24 hours unless it improves")
+			continue
+		}
+		if now.Sub(*r.PendingSince) < AutoStopConfirm {
+			continue
+		}
 		if err := p.SetActive(ctx, tok, a, ads.Ref{CampaignID: c.ExternalID, SetID: c.ExternalSetID}, false); err != nil {
 			_ = s.Store.SetCampaignStatus(ctx, c.ID, c.Status, "auto-stop could not pause: "+err.Error())
 			_ = s.Store.LogCampaign(ctx, c.ID, "rule", "pause failed", err.Error())
 			continue
 		}
 		_ = s.Store.SetCampaignStatus(ctx, c.ID, "paused", "")
+		_ = s.Store.SetAutoStrike(ctx, c.ID, nil)
 		_ = s.Store.LogCampaign(ctx, c.ID, "rule", "paused", detail)
 		slog.Info("auto-stop paused campaign", "campaign", c.ID, "detail", detail)
 	}

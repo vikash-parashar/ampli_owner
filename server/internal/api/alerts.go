@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"time"
 )
 
 // Play's bad-behaviour thresholds: above these the app is shown less in the store.
@@ -78,6 +79,10 @@ func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
 		case c.Status == "error":
 			add(Alert{ID: fmt.Sprintf("campaign-error-%d", c.ID), Severity: "high", Product: c.ProductID, Action: "open_ads",
 				Title: c.Name + " has a problem", Detail: firstOf(c.LastError, "Open it in Ads to see what the platform said.")})
+		case c.Status == "live" && c.AutoStop.Enabled && c.AutoStop.PendingSince != nil:
+			add(Alert{ID: fmt.Sprintf("campaign-autostop-soon-%d", c.ID), Severity: "high", Product: c.ProductID, Action: "open_ads",
+				Title:  fmt.Sprintf("Auto-stop will pause %s at the next sync", c.Name),
+				Detail: fmt.Sprintf("ROAS %.2fx is under your %.2fx limit. Resume or lower the limit to keep it running.", c.ROAS, c.AutoStop.MinROAS)})
 		case c.Status == "live" && c.Verdict.Code == "stop":
 			add(Alert{ID: fmt.Sprintf("campaign-stop-%d", c.ID), Severity: "high", Product: c.ProductID, Action: "open_ads",
 				Title:  fmt.Sprintf("%s is losing money (%.2fx back)", c.Name, c.ROAS),
@@ -86,6 +91,16 @@ func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
 			add(Alert{ID: fmt.Sprintf("campaign-warn-%d", c.ID), Severity: "medium", Product: c.ProductID, Action: "open_ads",
 				Title: c.Name + " needs a look", Detail: c.LastError})
 		}
+	}
+
+	paused, err := s.Store.RecentRulePauses(ctx, s.Now().Add(-72*time.Hour))
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	for _, e := range paused {
+		add(Alert{ID: fmt.Sprintf("campaign-autostopped-%d", e.CampaignID), Severity: "medium", Action: "open_ads",
+			Title: "Auto-stop paused a campaign", Detail: e.Detail})
 	}
 
 	accts, err := s.Store.AdAccounts(ctx)

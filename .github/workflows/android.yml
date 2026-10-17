@@ -20,15 +20,23 @@ jobs:
       # GitHub's Ubuntu runners ship with the Android SDK preinstalled.
       - uses: gradle/actions/setup-gradle@v4
       - run: echo "sdk.dir=$ANDROID_HOME" > local.properties
-      # Release build (not debuggable). Signed with the key from these secrets when they are set,
-      # otherwise with the test key in the repo (see app/build.gradle.kts).
-      - run: chmod +x gradlew && ./gradlew --no-daemon assembleRelease
+      # With the OWNER_KEYSTORE_* secrets: release build (not debuggable) signed with your own key.
+      # Without them: the debug build signed with the committed test key, so there is still something to install.
+      - run: |
+          chmod +x gradlew
+          if [ -n "$OWNER_KEYSTORE_BASE64" ]; then
+            ./gradlew --no-daemon assembleRelease
+            cp app/build/outputs/apk/release/app-release.apk "AmpliOwner-${GITHUB_RUN_NUMBER}.apk"
+          else
+            echo "::warning::OWNER_KEYSTORE_* secrets not set; building the test-key debug APK"
+            ./gradlew --no-daemon assembleDebug
+            cp app/build/outputs/apk/debug/app-debug.apk "AmpliOwner-${GITHUB_RUN_NUMBER}.apk"
+          fi
         env:
           OWNER_KEYSTORE_BASE64: ${{ secrets.OWNER_KEYSTORE_BASE64 }}
           OWNER_KEYSTORE_PASSWORD: ${{ secrets.OWNER_KEYSTORE_PASSWORD }}
           OWNER_KEY_ALIAS: ${{ secrets.OWNER_KEY_ALIAS }}
           OWNER_KEY_PASSWORD: ${{ secrets.OWNER_KEY_PASSWORD }}
-      - run: cp app/build/outputs/apk/release/app-release.apk "AmpliOwner-${GITHUB_RUN_NUMBER}.apk"
       - uses: actions/upload-artifact@v4
         with: { name: AmpliOwner-apk, path: android/AmpliOwner-*.apk }
       # A release gives a direct download link that opens on the phone.

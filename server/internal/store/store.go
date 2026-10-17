@@ -39,45 +39,38 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if _, err := s.DB.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
 		return err
 	}
-	// Two cold starts can race here; a session lock makes the second wait for the first.
-	conn, err := s.DB.Acquire(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Release()
-	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(7420017)`); err != nil {
-		return err
-	}
-	defer conn.Exec(context.Background(), `SELECT pg_advisory_unlock(7420017)`) //nolint:errcheck
+	// Two cold starts can race here. One transaction holding a transaction-scoped lock makes the second wait,
+	// and works through poolers (Neon, RDS Proxy) that don't keep session state.
 	names, err := fs.Glob(migrations.FS, "*.sql")
 	if err != nil {
 		return err
 	}
 	sort.Strings(names)
-	for _, name := range names {
-		var done bool
-		if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)`, name).Scan(&done); err != nil {
+	return pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(7420017)`); err != nil {
 			return err
 		}
-		if done {
-			continue
-		}
-		sql, err := fs.ReadFile(migrations.FS, name)
-		if err != nil {
-			return err
-		}
-		err = pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
-			if _, err := tx.Exec(ctx, string(sql)); err != nil {
+		for _, name := range names {
+			var done bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)`, name).Scan(&done); err != nil {
 				return err
 			}
-			_, err := tx.Exec(ctx, `INSERT INTO schema_migrations (name) VALUES ($1)`, name)
-			return err
-		})
-		if err != nil {
-			return fmt.Errorf("migration %s: %w", name, err)
+			if done {
+				continue
+			}
+			sql, err := fs.ReadFile(migrations.FS, name)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, string(sql)); err != nil {
+				return fmt.Errorf("migration %s: %w", name, err)
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (name) VALUES ($1)`, name); err != nil {
+				return err
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // ---- tickets ----

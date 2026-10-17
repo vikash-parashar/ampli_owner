@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/vikash-parashar/ampli_owner/server/internal/ads"
+	"github.com/vikash-parashar/ampli_owner/server/internal/play"
 	"github.com/vikash-parashar/ampli_owner/server/internal/store"
 )
 
@@ -146,9 +147,9 @@ func (s *Server) publicPurchase(w http.ResponseWriter, r *http.Request) {
 	}
 	p := store.Purchase{ProductID: in.Product, InstallID: strings.ToLower(in.InstallID), Kind: sku.Kind, SKU: in.SKU,
 		AmountPaise: sku.PricePaise, Currency: "INR", TokenHash: s.hashKey("purchase", in.PurchaseToken)}
-	verified, status, msg := s.verifyPurchase(ctx, in.Product, in.SKU, in.PurchaseToken, &p)
-	if !verified && status != 0 {
-		writeErr(w, status, msg)
+	v := s.verifyPurchase(ctx, in.Product, in.SKU, in.PurchaseToken, &p)
+	if v.status != 0 && !v.keep {
+		writeErr(w, v.status, v.msg)
 		return
 	}
 	created, err := s.Store.SavePurchase(ctx, p)
@@ -156,35 +157,57 @@ func (s *Server) publicPurchase(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, err)
 		return
 	}
+	if v.status != 0 {
+		// Saved unverified so nothing is lost; the app retries and the retry upgrades the row.
+		w.Header().Set("Retry-After", "3600")
+		writeErr(w, v.status, v.msg)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]bool{"recorded": created, "verified": p.Verified})
 }
 
-// verifyPurchase asks Google Play about the token. Without a Play service account the purchase is stored
-// unverified (kept out of revenue) so nothing is lost; a token Google rejects is refused.
-func (s *Server) verifyPurchase(ctx context.Context, product, sku, token string, p *store.Purchase) (bool, int, string) {
+// verdict on a purchase token. status 0 = store it (verified, or a tester purchase that is not money).
+// Otherwise status is the HTTP answer: 422 = Google refused it (the app drops it), 409 = pending (retry),
+// 503 = Google unreachable or not set up (retry; keep = store unverified meanwhile).
+type purchaseCheck struct {
+	status int
+	msg    string
+	keep   bool
+}
+
+func (s *Server) verifyPurchase(ctx context.Context, product, sku, token string, p *store.Purchase) purchaseCheck {
+	p.OrderID = "unverified:" + p.TokenHash
 	if s.Play == nil {
-		p.OrderID = "unverified:" + p.TokenHash
-		return false, 0, ""
+		return purchaseCheck{http.StatusServiceUnavailable, "purchase saved; it is checked once Google Play is connected, retry later", true}
 	}
 	pkg, err := s.packageOf(ctx, product)
 	if err != nil {
-		return false, http.StatusInternalServerError, "internal error"
+		return purchaseCheck{status: http.StatusInternalServerError, msg: "internal error"}
 	}
 	gp, err := s.Play.ProductPurchase(ctx, pkg, sku, token)
-	if err != nil {
-		slog.Warn("purchase check failed", "product", product, "sku", sku, "err", err)
-		return false, http.StatusBadRequest, "Google Play did not confirm this purchase"
+	var he *play.HTTPError
+	if errors.As(err, &he) && he.Status >= 400 && he.Status < 500 && he.Status != http.StatusTooManyRequests {
+		slog.Warn("purchase refused by Google", "product", product, "sku", sku, "status", he.Status)
+		return purchaseCheck{status: http.StatusUnprocessableEntity, msg: "Google Play did not confirm this purchase"}
 	}
-	if gp.State != 0 {
-		return false, http.StatusBadRequest, "purchase is not completed"
+	if err != nil {
+		slog.Warn("purchase check failed, will retry", "product", product, "sku", sku, "err", err)
+		return purchaseCheck{http.StatusServiceUnavailable, "Google Play is not answering; retry later", true}
+	}
+	switch gp.State {
+	case 0:
+	case 2:
+		return purchaseCheck{status: http.StatusConflict, msg: "payment pending; retry when it completes"}
+	default:
+		return purchaseCheck{status: http.StatusUnprocessableEntity, msg: "purchase was cancelled"}
 	}
 	p.OrderID, p.Region = gp.OrderID, gp.RegionCode
 	if gp.Test {
 		p.Region = "TEST" // license testers and promo codes are not money
-		return false, 0, ""
+		return purchaseCheck{}
 	}
 	p.Verified, p.NetPaise = true, netOf(p.AmountPaise)
-	return true, 0, ""
+	return purchaseCheck{}
 }
 
 // eventNames lists the counters each app may send.

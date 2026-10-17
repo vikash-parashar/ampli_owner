@@ -11,7 +11,7 @@ import (
 // ---- auto-stop rules and the campaign log ----
 
 func (s *Store) SetAutoStop(ctx context.Context, id int64, a AutoStop) error {
-	tag, err := s.DB.Exec(ctx, `UPDATE campaigns SET auto_stop=$2, auto_min_roas=$3, auto_min_days=$4, auto_min_spend=$5 WHERE id=$1`,
+	tag, err := s.DB.Exec(ctx, `UPDATE campaigns SET auto_stop=$2, auto_min_roas=$3, auto_min_days=$4, auto_min_spend=$5, auto_strike_at=NULL WHERE id=$1`,
 		id, a.Enabled, a.MinROAS, a.MinDays, a.MinSpendPaise)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrNotFound

@@ -14,6 +14,7 @@
 //	PLAY_SERVICE_ACCOUNT_JSON, PLAY_GCS_BUCKET, FX_RATES
 //	ADMOB_APPS ("mp3=ca-app-pub-...~123,naukri=...", uses the Google Ads OAuth client)
 //	OWNER_TOKEN_NEXT  a second accepted owner token while rotating OWNER_TOKEN
+//	SSM_PREFIX        read secrets from SSM SecureString parameters <prefix><NAME> (see ssm.go)
 //
 // `server seed <dir>` loads checklist.json, guides.json and features.json from dir and exits.
 // `server sync` pulls ad results, AdMob and Google Play once and exits (for a cron or scheduled task).
@@ -55,6 +56,9 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if err := loadSSM(ctx); err != nil {
+		return err
+	}
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		return errMissing("DATABASE_URL")

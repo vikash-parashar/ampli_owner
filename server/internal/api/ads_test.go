@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -66,6 +67,9 @@ func (f *fakeMeta) SetDailyBudget(_ context.Context, _ ads.Token, _ ads.Account,
 	return nil
 }
 
+// clockAhead moves the test server's clock forward (nanoseconds).
+var clockAhead atomic.Int64
+
 func TestAdsManagerFlow(t *testing.T) {
 	fake := &fakeMeta{active: map[string]bool{}, budget: map[string]int64{}}
 	box, _ := secret.New(base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")))
@@ -73,7 +77,9 @@ func TestAdsManagerFlow(t *testing.T) {
 		s.Box, s.PublicURL = box, "https://owner.test"
 		s.Platforms = map[string]ads.Platform{"meta": fake}
 		s.Play = fakePlay(t)
+		s.Now = func() time.Time { return time.Now().Add(time.Duration(clockAhead.Load())) }
 	})
+	clockAhead.Store(0)
 
 	// Connect: the app gets a sign-in link, the platform calls back with a code.
 	var conn struct {
@@ -164,8 +170,23 @@ func TestAdsManagerFlow(t *testing.T) {
 	}
 	// A forged token is refused; a license tester's purchase is stored but is not money.
 	forged := map[string]any{"product": "mp3", "install_id": "00000000-0000-4000-8000-000000000002", "sku": "ampli_pro", "purchase_token": "forged-token-1"}
-	if code := call(t, srv, "POST", "/v1/public/purchases", false, forged, nil); code != 400 {
+	if code := call(t, srv, "POST", "/v1/public/purchases", false, forged, nil); code != 422 {
 		t.Fatalf("forged purchase: %d", code)
+	}
+	forged["purchase_token"] = "pend-token-1"
+	if code := call(t, srv, "POST", "/v1/public/purchases", false, forged, nil); code != 409 {
+		t.Fatalf("pending purchase: %d", code)
+	}
+	// Google down: saved unverified with 503 (retry); the retry after Google is back upgrades it.
+	playDown.Store(true)
+	forged["purchase_token"] = "flaky-token-1"
+	if code := call(t, srv, "POST", "/v1/public/purchases", false, forged, nil); code != 503 {
+		t.Fatalf("google down: %d", code)
+	}
+	playDown.Store(false)
+	var up struct{ Recorded, Verified bool }
+	if code := call(t, srv, "POST", "/v1/public/purchases", false, forged, &up); code != 200 || !up.Recorded || !up.Verified {
+		t.Fatalf("retry after outage: %d %+v", code, up)
 	}
 	forged["purchase_token"] = "test-token-1"
 	if code := call(t, srv, "POST", "/v1/public/purchases", false, forged, nil); code != 200 {
@@ -187,7 +208,7 @@ func TestAdsManagerFlow(t *testing.T) {
 		"install_id": "00000000-0000-4000-8000-000000000001", "events": []string{"made_up_event"}}, nil); code != 400 {
 		t.Fatalf("unknown event: %d", code)
 	}
-	const net = 2 * 14334 // ₹199 minus 18% GST minus Google's 15%, twice
+	const net = 2 * 14334 // ₹199 minus 18% GST minus Google's 15%, twice (the organic install's purchase is not the ad's)
 	var list struct {
 		Summary   api.AdsSummary   `json:"summary"`
 		Campaigns []store.Campaign `json:"campaigns"`
@@ -212,8 +233,8 @@ func TestAdsManagerFlow(t *testing.T) {
 	// The MP3 dashboard counts the purchases and ad installs.
 	var d api.Dashboard
 	call(t, srv, "GET", "/v1/dashboard?product=mp3", true, nil, &d)
-	if d.BusinessPaise != net || d.ProSales != 2 || d.Downloads != 3 || d.WeeklyDownloads[3].Ads != 2 || d.WeeklyDownloads[3].Organic != 1 ||
-		d.Revenue30d[29] != net || d.Ads.SpendPaise != 600000 || len(d.Widgets) != 2 {
+	if d.BusinessPaise != net+14334 || d.ProSales != 3 || d.Downloads != 3 || d.WeeklyDownloads[3].Ads != 2 || d.WeeklyDownloads[3].Organic != 1 ||
+		d.Revenue30d[29] != net+14334 || d.Ads.SpendPaise != 600000 || len(d.Widgets) != 2 {
 		t.Fatalf("dashboard = %+v", d)
 	}
 	if got.Attribution != "estimate" {
@@ -239,6 +260,17 @@ func TestAdsManagerFlow(t *testing.T) {
 	if !fake.active["1001"] {
 		t.Fatal("resume did not reach the platform")
 	}
+	// First below-limit sync only warns; the one 24 hours later pauses.
+	call(t, srv, "POST", "/v1/ads/sync?force=1", true, nil, nil)
+	call(t, srv, "GET", "/v1/ads/campaigns?product=mp3", true, nil, &list)
+	if list.Campaigns[0].Status != "live" || list.Campaigns[0].AutoStop.PendingSince == nil || !fake.active["1001"] {
+		t.Fatalf("first strike: %+v", list.Campaigns[0])
+	}
+	call(t, srv, "GET", "/v1/alerts", true, nil, &alerts)
+	if alerts[0].ID != "campaign-autostop-soon-1" {
+		t.Fatalf("alerts before pause = %+v", alerts)
+	}
+	clockAhead.Store(int64(25 * time.Hour))
 	call(t, srv, "POST", "/v1/ads/sync?force=1", true, nil, nil)
 	call(t, srv, "GET", "/v1/ads/campaigns?product=mp3", true, nil, &list)
 	if list.Campaigns[0].Status != "paused" || fake.active["1001"] {
@@ -246,8 +278,27 @@ func TestAdsManagerFlow(t *testing.T) {
 	}
 	var log []store.LogEntry
 	call(t, srv, "GET", "/v1/ads/campaigns/1/log", true, nil, &log)
-	if len(log) < 5 || log[0].Actor != "rule" || log[0].Action != "paused" {
+	if len(log) < 6 || log[0].Actor != "rule" || log[0].Action != "paused" || log[1].Action != "will pause" {
 		t.Fatalf("log = %+v", log)
+	}
+	call(t, srv, "GET", "/v1/alerts", true, nil, &alerts)
+	found := false
+	for _, a := range alerts {
+		found = found || a.ID == "campaign-autostopped-1"
+	}
+	if !found {
+		t.Fatalf("no paused alert: %+v", alerts)
+	}
+
+	// A manual resume is honoured: the rule waits instead of pausing it again at the next syncs.
+	call(t, srv, "POST", "/v1/ads/campaigns/1/resume", true, nil, &c)
+	for _, ahead := range []time.Duration{26 * time.Hour, 51 * time.Hour} {
+		clockAhead.Store(int64(ahead))
+		call(t, srv, "POST", "/v1/ads/sync?force=1", true, nil, nil)
+	}
+	call(t, srv, "GET", "/v1/ads/campaigns?product=mp3", true, nil, &list)
+	if list.Campaigns[0].Status != "live" || !fake.active["1001"] {
+		t.Fatalf("rule overrode a manual resume: %+v", list.Campaigns[0])
 	}
 
 	// Delete forgets it.

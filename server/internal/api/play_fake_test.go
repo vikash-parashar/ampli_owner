@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/vikash-parashar/ampli_owner/server/internal/play"
@@ -16,6 +17,9 @@ import (
 
 // fakePlay answers token and purchase calls like Google Play. Tokens starting with "good-" are paid,
 // "test-" are license-tester purchases, anything else is rejected.
+// playDown makes "flaky-" tokens fail with 503 until a test sets it false.
+var playDown atomic.Bool
+
 func fakePlay(t *testing.T) *play.Client {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -27,6 +31,13 @@ func fakePlay(t *testing.T) *play.Client {
 		switch {
 		case strings.HasPrefix(tok, "good-"):
 			json.NewEncoder(w).Encode(map[string]any{"purchaseState": 0, "orderId": "GPA." + tok, "regionCode": "IN"})
+		case strings.HasPrefix(tok, "flaky-") && playDown.Load():
+			w.WriteHeader(503)
+			w.Write([]byte(`{"error":{"message":"Backend Error"}}`))
+		case strings.HasPrefix(tok, "flaky-"):
+			json.NewEncoder(w).Encode(map[string]any{"purchaseState": 0, "orderId": "GPA." + tok, "regionCode": "IN"})
+		case strings.HasPrefix(tok, "pend-"):
+			json.NewEncoder(w).Encode(map[string]any{"purchaseState": 2, "orderId": "GPA." + tok})
 		case strings.HasPrefix(tok, "test-"):
 			json.NewEncoder(w).Encode(map[string]any{"purchaseState": 0, "orderId": "GPA." + tok, "regionCode": "IN", "purchaseType": 0})
 		default:

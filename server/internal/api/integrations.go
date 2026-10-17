@@ -145,7 +145,8 @@ func (s *Server) SyncIntegrations(ctx context.Context) SyncResult {
 			if s.PlayBucket == "" {
 				continue
 			}
-			for _, month := range []time.Time{today.AddDate(0, -1, 0), today} {
+			thisMonth := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC)
+			for _, month := range []time.Time{thisMonth.AddDate(0, -1, 0), thisMonth} { // from the 1st, so the 31st has a previous month
 				rows, err := s.Play.BulkStats(ctx, s.PlayBucket, p.PackageID, month)
 				if err != nil {
 					add(fmt.Sprintf("%s Play report %s", p.Name, month.Format("Jan")), err)

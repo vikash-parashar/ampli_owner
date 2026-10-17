@@ -38,20 +38,16 @@ android {
             keyAlias = "owner"
             keyPassword = "android"
         }
-        // Release: the key from GitHub secrets (OWNER_KEYSTORE_BASE64, OWNER_KEYSTORE_PASSWORD, OWNER_KEY_ALIAS,
-        // OWNER_KEY_PASSWORD). Until those secrets exist it falls back to the test key so CI keeps working.
-        create("release") {
-            val ks = releaseKeystore()
-            if (ks != null) {
+        // Release: only the key from GitHub secrets (OWNER_KEYSTORE_BASE64, OWNER_KEYSTORE_PASSWORD, OWNER_KEY_ALIAS,
+        // OWNER_KEY_PASSWORD). Never the committed test key: without the secrets the release APK is left unsigned
+        // and CI builds the debug APK instead.
+        val ks = releaseKeystore()
+        if (ks != null) {
+            create("release") {
                 storeFile = ks
                 storePassword = System.getenv("OWNER_KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("OWNER_KEY_ALIAS")
                 keyPassword = System.getenv("OWNER_KEY_PASSWORD")
-            } else {
-                storeFile = file("owner-test.keystore")
-                storePassword = "android"
-                keyAlias = "owner"
-                keyPassword = "android"
             }
         }
     }
@@ -63,7 +59,7 @@ android {
             isMinifyEnabled = false
             isShrinkResources = false
             isDebuggable = false
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 

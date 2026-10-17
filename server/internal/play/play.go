@@ -136,13 +136,22 @@ func (c *Client) do(ctx context.Context, method, u, bearer string, body any, out
 			} `json:"error"`
 		}
 		_ = json.Unmarshal(raw, &e)
-		return fmt.Errorf("Google Play: %s (HTTP %d)", e.Error.Message, resp.StatusCode)
+		return &HTTPError{Status: resp.StatusCode, Msg: e.Error.Message}
 	}
 	if out != nil {
 		return json.Unmarshal(raw, out)
 	}
 	return nil
 }
+
+// HTTPError is a non-2xx answer from Google. Status 4xx means the request (e.g. a purchase token) was refused;
+// 5xx means try again later.
+type HTTPError struct {
+	Status int
+	Msg    string
+}
+
+func (e *HTTPError) Error() string { return fmt.Sprintf("Google Play: %s (HTTP %d)", e.Msg, e.Status) }
 
 // Review is one Play review (Play only returns those from the last week).
 type Review struct {

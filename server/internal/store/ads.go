@@ -124,6 +124,10 @@ type AutoStop struct {
 	MinROAS       float64 `json:"min_roas"`
 	MinDays       int     `json:"min_days"`
 	MinSpendPaise int64   `json:"min_spend_paise"`
+	// PendingSince is when a sync first found the campaign below the limit; the next sync 24 h later pauses it.
+	PendingSince *time.Time `json:"pending_since"`
+	// HoldUntil: after the owner resumes by hand, the rule waits until then.
+	HoldUntil *time.Time `json:"hold_until"`
 }
 
 // attribution assigns each ad install to one campaign: by our own utm_campaign link first,
@@ -146,7 +150,7 @@ WITH att AS (
 const campaignSelect = attribution + `
 SELECT c.id, c.platform, COALESCE(c.product_id, ''), c.name, c.status, c.countries, c.daily_budget_paise, c.spend_paise,
   c.impressions, c.clicks, c.installs, c.revenue_paise, c.ad_account_id, COALESCE(c.utm_campaign, ''), c.creative_url, c.last_error,
-  c.created_at, c.external_id, c.external_set_id, c.auto_stop, c.auto_min_roas, c.auto_min_days, c.auto_min_spend,
+  c.created_at, c.external_id, c.external_set_id, c.auto_stop, c.auto_min_roas, c.auto_min_days, c.auto_min_spend, c.auto_strike_at, c.auto_hold_until,
   (SELECT count(*) FROM campaign_days d WHERE d.campaign_id = c.id AND d.spend_paise > 0)::int,
   COALESCE(per.installs, 0), COALESCE(per.by_link, 0), COALESCE(per.revenue, 0)
 FROM campaigns c LEFT JOIN per ON per.campaign_id = c.id`
@@ -157,7 +161,7 @@ func scanCampaign(r pgx.Row) (Campaign, error) {
 	err := r.Scan(&c.ID, &c.Platform, &c.ProductID, &c.Name, &c.Status, &c.Countries, &c.DailyBudgetPaise, &c.SpendPaise,
 		&c.Impressions, &c.Clicks, &c.Installs, &c.manualRevenue, &c.AdAccountID, &c.UTMCampaign, &c.CreativeURL, &c.LastError,
 		&c.CreatedAt, &c.ExternalID, &c.ExternalSetID, &c.AutoStop.Enabled, &c.AutoStop.MinROAS, &c.AutoStop.MinDays,
-		&c.AutoStop.MinSpendPaise, &c.Days, &c.AttributedInstalls, &byLink, &attrRev)
+		&c.AutoStop.MinSpendPaise, &c.AutoStop.PendingSince, &c.AutoStop.HoldUntil, &c.Days, &c.AttributedInstalls, &byLink, &attrRev)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return c, ErrNotFound
 	}
@@ -245,6 +249,32 @@ func (s *Store) SetCampaignBudget(ctx context.Context, id int64, paise int64) er
 	return err
 }
 
+// SetAutoStrike records (or clears, with nil) the first below-limit sync.
+func (s *Store) SetAutoStrike(ctx context.Context, id int64, at *time.Time) error {
+	_, err := s.DB.Exec(ctx, `UPDATE campaigns SET auto_strike_at=$2 WHERE id=$1`, id, at)
+	return err
+}
+
+// HoldAutoStop clears any strike and keeps the rule off until `until` (after a manual resume).
+func (s *Store) HoldAutoStop(ctx context.Context, id int64, until time.Time) error {
+	_, err := s.DB.Exec(ctx, `UPDATE campaigns SET auto_strike_at=NULL, auto_hold_until=$2 WHERE id=$1`, id, until)
+	return err
+}
+
+// RecentRulePauses lists campaigns the auto-stop rule paused since `since`.
+func (s *Store) RecentRulePauses(ctx context.Context, since time.Time) ([]LogEntry, error) {
+	rows, err := s.DB.Query(ctx, `SELECT l.id, l.campaign_id, l.actor, l.action, c.name || ': ' || l.detail, l.created_at
+		FROM campaign_log l JOIN campaigns c ON c.id = l.campaign_id
+		WHERE l.actor='rule' AND l.action='paused' AND l.created_at >= $1 AND c.status='paused' ORDER BY l.created_at DESC`, since)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (LogEntry, error) {
+		var e LogEntry
+		return e, r.Scan(&e.ID, &e.CampaignID, &e.Actor, &e.Action, &e.Detail, &e.CreatedAt)
+	})
+}
+
 // DeleteCampaign removes a campaign with its daily numbers and log.
 func (s *Store) DeleteCampaign(ctx context.Context, id int64) error {
 	tag, err := s.DB.Exec(ctx, `DELETE FROM campaigns WHERE id=$1`, id)
@@ -322,12 +352,23 @@ type Purchase struct {
 	Verified    bool
 }
 
-// SavePurchase stores a purchase once (by order id and by token).
+// SavePurchase stores a purchase once per token. A row saved unverified (Google was down or not set up) is
+// upgraded when the app retries and Google confirms it; a verified row is never changed. It reports whether
+// the call inserted or upgraded a row.
 func (s *Store) SavePurchase(ctx context.Context, p Purchase) (bool, error) {
-	tag, err := s.DB.Exec(ctx, `INSERT INTO purchases (product_id, install_id, kind, sku, amount_paise, net_paise, currency, order_id,
-		token_hash, region, verified) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING`,
+	rows, err := s.DB.Query(ctx, `INSERT INTO purchases (product_id, install_id, kind, sku, amount_paise, net_paise, currency, order_id,
+		token_hash, region, verified) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		ON CONFLICT (token_hash) WHERE token_hash IS NOT NULL DO UPDATE SET order_id=EXCLUDED.order_id, region=EXCLUDED.region,
+			net_paise=EXCLUDED.net_paise, verified=EXCLUDED.verified
+		WHERE NOT purchases.verified AND EXCLUDED.verified
+		RETURNING id`,
 		p.ProductID, p.InstallID, p.Kind, p.SKU, p.AmountPaise, p.NetPaise, p.Currency, p.OrderID, p.TokenHash, p.Region, p.Verified)
-	return err == nil && tag.RowsAffected() == 1, err
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	changed := rows.Next()
+	return changed, rows.Err()
 }
 
 // HasPro reports whether Google confirmed a Pro purchase for this install.

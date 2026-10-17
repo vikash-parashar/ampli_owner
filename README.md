@@ -39,13 +39,19 @@ Tests need a throwaway Postgres: `make test` (uses `TEST_DATABASE_URL`).
 6. Daily sync: EventBridge Scheduler > target this Lambda > payload `{"task":"sync"}` (once a day, 06:00 IST).
    It pulls ad results (and runs auto-stop rules), AdMob earnings, Play vitals, reviews, refunds and reports.
 
-Secrets live in Lambda env (or SSM Parameter Store SecureString / Secrets Manager) and GitHub secrets, never in
-the repo or chat.
+**Secrets in SSM, not plain Lambda env.** Create SecureString parameters `/ampli-owner/DATABASE_URL`,
+`/ampli-owner/OWNER_TOKEN`, `/ampli-owner/TOKEN_KEY`, `/ampli-owner/PLAY_SERVICE_ACCOUNT_JSON`, and the ad secrets
+(`META_APP_SECRET`, `TIKTOK_APP_SECRET`, `GOOGLE_ADS_CLIENT_SECRET`, `GOOGLE_ADS_DEVELOPER_TOKEN`; full list in
+`cmd/server/ssm.go`). Add the *AWS Parameters and Secrets Lambda Extension* layer, set the env `SSM_PREFIX=/ampli-owner/`,
+and give the Lambda role `ssm:GetParameter` on `arn:aws:ssm:ap-south-1:<account>:parameter/ampli-owner/*` plus
+`kms:Decrypt` on the key. Only non-secret settings (PUBLIC_URL, ids, ADMOB_APPS, PLAY_GCS_BUCKET) stay in plain env.
+Never put secrets in the repo or chat.
 
 **Rotating the owner token.** Set `OWNER_TOKEN_NEXT` to a new value, update the app's Settings, then move the new
 value into `OWNER_TOKEN` and clear `OWNER_TOKEN_NEXT`. Both work in between, so nothing breaks.
 
-**Release APK signing.** CI signs release APKs when these GitHub secrets exist: `OWNER_KEYSTORE_BASE64`
+**Release APK signing.** CI builds the non-debuggable release APK only when these GitHub secrets exist (until then it
+builds the test-key debug APK, and the release build never uses the test key): `OWNER_KEYSTORE_BASE64`
 (`base64 -w0 owner.jks`), `OWNER_KEYSTORE_PASSWORD`, `OWNER_KEY_ALIAS`, `OWNER_KEY_PASSWORD`. Create the
 keystore once with `keytool -genkeypair -v -keystore owner.jks -alias owner -keyalg RSA -keysize 4096 -validity 10000`
 and keep a copy offline: losing it means uninstalling to update.
@@ -82,8 +88,8 @@ and app) does not expire every 60 days like a personal login. For Google, publis
 
 **Google Play (purchases, reviews, vitals, reports).** Google Cloud project > enable *Google Play Android Developer
 API* and *Google Play Developer Reporting API* > service account with a JSON key. In Play Console > Users and
-permissions, invite its email with "View app information and download bulk reports", "View financial data",
-"Manage orders" and "Reply to reviews". Env: `PLAY_SERVICE_ACCOUNT_JSON` (the file contents) and
+permissions, invite its email with only "View app information and download bulk reports", "View financial data"
+and "Reply to reviews" (not "Manage orders": the server never refunds or changes orders). Env: `PLAY_SERVICE_ACCOUNT_JSON` (the file contents) and
 `PLAY_GCS_BUCKET` (Play Console > Download reports > copy the Cloud Storage URI, the `pubsite_prod_...` part).
 With the service account set, every purchase is checked with Google before it counts as money.
 
