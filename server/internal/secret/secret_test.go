@@ -26,6 +26,9 @@ func TestSealAndState(t *testing.T) {
 	if _, err := b.CheckState("tiktok"+st[4:], now); err == nil {
 		t.Fatal("tampered state accepted")
 	}
+	if st2 := b.State("meta", now, time.Minute); st2 == st {
+		t.Fatal("two states are identical; replay protection needs them unique")
+	}
 	if _, err := New("short"); err == nil {
 		t.Fatal("bad key accepted")
 	}

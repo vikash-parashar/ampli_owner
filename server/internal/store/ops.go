@@ -228,3 +228,36 @@ func (s *Store) ExpiringAccounts(ctx context.Context, before time.Time) ([]AdAcc
 	}
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (AdAccount, error) { return scanAccount(r) })
 }
+
+// UseState records an OAuth state as used and reports false when it was used before (a replayed callback).
+func (s *Store) UseState(ctx context.Context, stateHash string) (bool, error) {
+	tag, err := s.DB.Exec(ctx, `INSERT INTO oauth_states_used (state_hash) VALUES ($1) ON CONFLICT DO NOTHING`, stateHash)
+	return err == nil && tag.RowsAffected() == 1, err
+}
+
+// UncheckedPurchases counts purchases still waiting for Google's confirmation, saved between since and before.
+// Tester and promo-code rows are not waiting for anything.
+func (s *Store) UncheckedPurchases(ctx context.Context, since, before time.Time) (int64, error) {
+	var n int64
+	err := s.DB.QueryRow(ctx, `SELECT count(*) FROM purchases WHERE NOT verified AND region NOT IN ('TEST','PROMO')
+		AND refunded_at IS NULL AND created_at >= $1 AND created_at < $2`, since, before).Scan(&n)
+	return n, err
+}
+
+// SetExactNet replaces estimated net amounts with Google's earnings-report figures, per order id.
+func (s *Store) SetExactNet(ctx context.Context, net map[string]int64) (int64, error) {
+	if len(net) == 0 {
+		return 0, nil
+	}
+	orders, amounts := make([]string, 0, len(net)), make([]int64, 0, len(net))
+	for o, v := range net {
+		orders, amounts = append(orders, o), append(amounts, max(v, 0))
+	}
+	tag, err := s.DB.Exec(ctx, `UPDATE purchases p SET net_paise=v.net, net_exact=true
+		FROM unnest($1::text[], $2::bigint[]) AS v(o, net)
+		WHERE p.order_id=v.o AND p.verified AND (NOT p.net_exact OR p.net_paise <> v.net)`, orders, amounts)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}

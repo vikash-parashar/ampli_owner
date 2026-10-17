@@ -63,7 +63,7 @@ func (s *Server) admobCallback(r *http.Request, page func(int, string, string)) 
 		page(http.StatusNotFound, "AdMob is not set up", "")
 		return
 	}
-	if got, err := s.Box.CheckState(q.Get("state"), s.Now()); err != nil || got != "admob" {
+	if got, err := s.Box.CheckState(q.Get("state"), s.Now()); err != nil || got != "admob" || !s.stateOnce(r) {
 		page(http.StatusBadRequest, "Link expired", "Start again from Ampli Owner > Settings > AdMob.")
 		return
 	}
@@ -100,6 +100,7 @@ type SyncResult struct {
 	Reviews   int      `json:"reviews"`
 	PlayDays  int      `json:"play_days"`
 	Refunds   int      `json:"refunds"`
+	ExactNet  int64    `json:"exact_net"` // purchases whose net came from Google's earnings report
 	Errors    []string `json:"errors"`
 }
 
@@ -168,6 +169,25 @@ func (s *Server) SyncIntegrations(ctx context.Context) SyncResult {
 				}
 			}
 		}
+		if s.PlayBucket != "" {
+			// Last month's earnings report gives each order's real net, including buyers paying in other currencies.
+			thisMonth := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC)
+			for _, month := range []time.Time{thisMonth.AddDate(0, -2, 0), thisMonth.AddDate(0, -1, 0)} {
+				net, err := s.Play.Earnings(ctx, s.PlayBucket, month)
+				if errors.Is(err, play.ErrNoObject) {
+					continue
+				}
+				if err != nil {
+					add("Play earnings "+month.Format("Jan"), err)
+					continue
+				}
+				n, err := s.Store.SetExactNet(ctx, net)
+				if err != nil {
+					add("earnings", err)
+				}
+				res.ExactNet += n
+			}
+		}
 		n, problems := s.SyncReviews(ctx)
 		res.Reviews = n
 		res.Errors = append(res.Errors, problems...)
@@ -223,6 +243,15 @@ func (s *Server) syncAdMob(ctx context.Context, today time.Time) (int, error) {
 		}
 	}
 	return len(earnings), nil
+}
+
+// stateOnce marks the callback's OAuth state as used; a second callback with the same state is refused.
+func (s *Server) stateOnce(r *http.Request) bool {
+	ok, err := s.Store.UseState(r.Context(), s.hashKey("oauth-state", r.URL.Query().Get("state")))
+	if err != nil {
+		slog.Error("oauth state", "err", err)
+	}
+	return ok
 }
 
 func errText(err error) string {

@@ -136,6 +136,21 @@ func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
 		add(Alert{ID: "play-error", Severity: "low", Action: "open_settings", Title: "Google Play sync had a problem", Detail: pl.LastError})
 	}
 
+	unchecked, err := s.Store.UncheckedPurchases(ctx, s.Now().AddDate(0, 0, -30), s.Now().Add(-6*time.Hour))
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	if unchecked > 0 {
+		a := Alert{ID: "purchases-unchecked", Severity: "high", Action: "open_settings",
+			Title:  fmt.Sprintf("Google Play hasn't confirmed %d purchase%s", unchecked, plural(unchecked)),
+			Detail: "They are saved but not counted as money yet. In Play Console > Users and permissions, give the service account \"View financial data\", and check each app's package name. The apps retry on their own."}
+		if s.Play == nil {
+			a.Severity, a.Detail = "medium", "Connect Google Play on the server (PLAY_SERVICE_ACCOUNT_JSON) so they can be checked and counted. The apps retry on their own."
+		}
+		add(a)
+	}
+
 	promos, err := s.Store.PromoReports(ctx)
 	if err != nil {
 		fail(w, r, err)

@@ -450,6 +450,9 @@ func (s *Store) Cleanup(ctx context.Context, today time.Time) error {
 	if _, err := s.DB.Exec(ctx, `DELETE FROM ip_hits WHERE day < $1::date - 2`, today); err != nil {
 		return err
 	}
+	if _, err := s.DB.Exec(ctx, `DELETE FROM oauth_states_used WHERE used_at < $1::date - 2`, today); err != nil {
+		return err
+	}
 	_, err := s.DB.Exec(ctx, `UPDATE installs SET referrer='', utm_content='' WHERE referrer <> '' AND created_at < $1::date - 90`, today)
 	return err
 }

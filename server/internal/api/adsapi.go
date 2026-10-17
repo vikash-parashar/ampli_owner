@@ -93,7 +93,7 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		page(http.StatusNotFound, "Unknown platform", "")
 		return
 	}
-	if got, err := s.Box.CheckState(q.Get("state"), s.Now()); err != nil || got != id {
+	if got, err := s.Box.CheckState(q.Get("state"), s.Now()); err != nil || got != id || !s.stateOnce(r) {
 		page(http.StatusBadRequest, "Link expired", "Start again from Ampli Owner > Ads > Connect.")
 		return
 	}

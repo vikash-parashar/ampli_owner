@@ -100,6 +100,11 @@ func TestAdsManagerFlow(t *testing.T) {
 		t.Fatalf("callback: %v %d", err, res.StatusCode)
 	}
 	res.Body.Close()
+	if replay, err := http.Get(srv.URL + "/oauth/meta/callback?code=good-code&state=" + url.QueryEscape(u.Query().Get("state"))); err != nil || replay.StatusCode != 400 {
+		t.Fatalf("replayed state accepted: %v", err)
+	} else {
+		replay.Body.Close()
+	}
 	var platforms []struct {
 		ID         string            `json:"id"`
 		Configured bool              `json:"configured"`

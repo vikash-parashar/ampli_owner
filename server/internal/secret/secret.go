@@ -67,20 +67,23 @@ func (b *Box) mac(msg string) string {
 	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 
-// State returns a signed OAuth state that names the platform and expires after ttl.
+// State returns a signed OAuth state that names the platform and expires after ttl. A random nonce makes each
+// state unique, so the server can refuse a second use (see Store.UseState).
 func (b *Box) State(platform string, now time.Time, ttl time.Duration) string {
-	msg := platform + "." + strconv.FormatInt(now.Add(ttl).Unix(), 10)
+	n := make([]byte, 12)
+	_, _ = rand.Read(n)
+	msg := platform + "." + strconv.FormatInt(now.Add(ttl).Unix(), 10) + "." + base64.RawURLEncoding.EncodeToString(n)
 	return msg + "." + b.mac(msg)
 }
 
 // CheckState verifies a value from State and returns its platform.
 func (b *Box) CheckState(state string, now time.Time) (string, error) {
 	parts := strings.Split(state, ".")
-	if len(parts) != 3 {
+	if len(parts) != 4 {
 		return "", errors.New("bad state")
 	}
-	msg := parts[0] + "." + parts[1]
-	if !hmac.Equal([]byte(b.mac(msg)), []byte(parts[2])) {
+	msg := strings.Join(parts[:3], ".")
+	if !hmac.Equal([]byte(b.mac(msg)), []byte(parts[3])) {
 		return "", errors.New("bad state signature")
 	}
 	exp, err := strconv.ParseInt(parts[1], 10, 64)

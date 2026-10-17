@@ -201,9 +201,16 @@ func (s *Server) verifyPurchase(ctx context.Context, product, sku, token string,
 	}
 	gp, err := s.Play.ProductPurchase(ctx, pkg, sku, token)
 	var he *play.HTTPError
-	if errors.As(err, &he) && he.Status >= 400 && he.Status < 500 && he.Status != http.StatusTooManyRequests {
+	if errors.As(err, &he) && (he.Status == http.StatusBadRequest || he.Status == http.StatusGone) {
+		// 400 = the token is not a real purchase, 410 = it expired: the app can drop it.
 		slog.Warn("purchase refused by Google", "product", product, "sku", sku, "status", he.Status)
 		return purchaseCheck{status: http.StatusUnprocessableEntity, msg: "Google Play did not confirm this purchase"}
+	}
+	if errors.As(err, &he) && he.Status != http.StatusTooManyRequests && he.Status < 500 {
+		// 401/403 = our service account lacks "View financial data"; 404 = wrong package or sku on our side.
+		// Our setup is wrong, not the purchase: keep it unverified and let the app retry (an alert says so).
+		slog.Error("purchase check blocked by our Play setup", "product", product, "sku", sku, "status", he.Status, "err", err)
+		return purchaseCheck{http.StatusServiceUnavailable, "purchase saved; the server can't check it with Google Play yet, retry later", true}
 	}
 	if err != nil {
 		slog.Warn("purchase check failed, will retry", "product", product, "sku", sku, "err", err)

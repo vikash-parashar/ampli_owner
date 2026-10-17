@@ -69,7 +69,8 @@ server, and the server stores the token encrypted (AES-GCM) in Postgres. Set on 
 *Facebook Login for Business*. Valid OAuth redirect URI: `PUBLIC_URL/oauth/meta/callback`. Development mode is
 enough for your own ad accounts. Register each Android app under Events Manager > Apps (package name) and note
 its app id. Env: `META_APP_ID`, `META_APP_SECRET`, `META_PAGE_ID` (the Page ads run as),
-`META_PROMOTED_APPS=mp3=<id>,carhub=<id>,naukri=<id>`.
+`META_PROMOTED_APPS=mp3=<id>,carhub=<id>,naukri=<id>`. The server signs every Meta call with `appsecret_proof`,
+so turn on App settings > Advanced > *Require App Secret*: a leaked token is then useless on its own.
 
 **TikTok.** business-api.tiktok.com > My apps > Create (needs approval, usually a few days). Advertiser redirect
 URL: `PUBLIC_URL/oauth/tiktok/callback`, scopes for ads management and reporting. Add each Android app in
@@ -91,7 +92,12 @@ API* and *Google Play Developer Reporting API* > service account with a JSON key
 permissions, invite its email with only "View app information and download bulk reports", "View financial data"
 and "Reply to reviews" (not "Manage orders": the server never refunds or changes orders). Env: `PLAY_SERVICE_ACCOUNT_JSON` (the file contents) and
 `PLAY_GCS_BUCKET` (Play Console > Download reports > copy the Cloud Storage URI, the `pubsite_prod_...` part).
-With the service account set, every purchase is checked with Google before it counts as money.
+With the service account set, every purchase is checked with Google before it counts as money. If the service
+account lacks access (Google answers 401/403/404), purchases are kept unverified, the apps keep retrying and a
+"Google Play hasn't confirmed N purchases" alert appears; fix the permission and they upgrade on the next retry.
+Net revenue is first estimated from the SKU price (GST removed for India, then Google's 15%). Early each month the
+sync reads the previous month's earnings report from `PLAY_GCS_BUCKET` and replaces the estimate with each order's
+real net in INR, which also prices buyers outside India correctly.
 
 **Prices.** The server prices purchases from its own SKU table (`GET/PUT /v1/skus`), seeded with ampli_pro ₹199,
 ampli_drive_pro ₹499 and the ₹49/99/199 tips. Make it match Play Console when you create the products.

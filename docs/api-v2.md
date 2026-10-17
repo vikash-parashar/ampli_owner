@@ -184,3 +184,12 @@ of the source app), `claimed` and `redeemed` (promo purchases of the sku in the 
 Public `POST /v1/public/promo/claim {product, install_id}` hands one code per verified Pro buyer (403 otherwise, 410 when
 none are left). Purchases Play marks `purchaseType = 1` are stored with region `PROMO`: counted, never revenue.
 An alert fires when 5 or fewer codes are left and buyers are still waiting. Hook spec v1.3 has the app side.
+
+## Review pass 3 (2026-10-17)
+- Purchases: Google 400/410 → **422** (drop). Google 401/403/404 (our service account or package is wrong) → **503**,
+  saved unverified, `Retry-After: 3600`, plus a high alert `purchases-unchecked` once any is 6 h old.
+- `POST /v1/integrations/sync` answers `exact_net`: purchases whose net came from the monthly earnings report
+  (`purchases.net_exact`).
+- OAuth states carry a random nonce and are single use (`oauth_states_used`); a replayed callback gets "Link expired".
+- Meta calls send `appsecret_proof`. HTTP server read/write/idle timeouts. Go 1.27.2, modules updated.
+

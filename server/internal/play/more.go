@@ -1,11 +1,13 @@
 package play
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/csv"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -222,6 +224,15 @@ func (c *Client) BulkStats(ctx context.Context, bucket, pkg string, month time.T
 var ErrNoObject = fmt.Errorf("Google Play: report not found")
 
 func (c *Client) objectCSV(ctx context.Context, bucket, object string) ([]map[string]string, error) {
+	raw, err := c.object(ctx, bucket, object)
+	if err != nil {
+		return nil, err
+	}
+	return parseCSV(raw)
+}
+
+// object downloads one file from the Play Console reports bucket.
+func (c *Client) object(ctx context.Context, bucket, object string) ([]byte, error) {
 	tok, err := c.accessToken(ctx)
 	if err != nil {
 		return nil, err
@@ -244,7 +255,101 @@ func (c *Client) objectCSV(ctx context.Context, bucket, object string) ([]map[st
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("Google Play reports: HTTP %d for %s", resp.StatusCode, object)
 	}
-	return parseCSV(raw)
+	return raw, nil
+}
+
+// list names the bucket's objects under a prefix.
+func (c *Client) list(ctx context.Context, bucket, prefix string) ([]string, error) {
+	tok, err := c.accessToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	page := ""
+	for i := 0; i < 20; i++ {
+		q := url.Values{"prefix": {prefix}}
+		if page != "" {
+			q.Set("pageToken", page)
+		}
+		var res struct {
+			Items []struct {
+				Name string `json:"name"`
+			} `json:"items"`
+			Next string `json:"nextPageToken"`
+		}
+		if err := c.do(ctx, "GET", c.Storage+"/storage/v1/b/"+url.PathEscape(bucket)+"/o?"+q.Encode(), tok, nil, &res); err != nil {
+			return nil, err
+		}
+		for _, it := range res.Items {
+			names = append(names, it.Name)
+		}
+		if page = res.Next; page == "" {
+			break
+		}
+	}
+	return names, nil
+}
+
+// Earnings reads a month's earnings report (written early the next month) and returns, per order id, what
+// reached the merchant account in paise: the charge minus Google's fee and the tax Google kept, at Google's
+// own exchange rate. Orders paid in other countries get their real value here. ErrNoObject = not out yet.
+func (c *Client) Earnings(ctx context.Context, bucket string, month time.Time) (map[string]int64, error) {
+	names, err := c.list(ctx, bucket, "earnings/earnings_"+month.Format("200601"))
+	if err != nil {
+		return nil, err
+	}
+	if len(names) == 0 {
+		return nil, ErrNoObject
+	}
+	net := map[string]float64{}
+	for _, n := range names {
+		raw, err := c.object(ctx, bucket, n)
+		if err != nil {
+			return nil, err
+		}
+		var files [][]byte
+		if strings.HasSuffix(n, ".zip") {
+			zr, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
+			if err != nil {
+				return nil, fmt.Errorf("Google Play earnings %s: %w", n, err)
+			}
+			for _, f := range zr.File {
+				rc, err := f.Open()
+				if err != nil {
+					return nil, err
+				}
+				b, err := io.ReadAll(io.LimitReader(rc, 64<<20))
+				rc.Close()
+				if err != nil {
+					return nil, err
+				}
+				files = append(files, b)
+			}
+		} else {
+			files = append(files, raw)
+		}
+		for _, f := range files {
+			rows, err := parseCSV(f)
+			if err != nil {
+				return nil, fmt.Errorf("Google Play earnings %s: %w", n, err)
+			}
+			for _, r := range rows {
+				order := r["Description"]
+				if !strings.HasPrefix(order, "GPA.") || r["Merchant Currency"] != "INR" {
+					continue
+				}
+				v, err := strconv.ParseFloat(strings.ReplaceAll(r["Amount (Merchant Currency)"], ",", ""), 64)
+				if err == nil {
+					net[order] += v
+				}
+			}
+		}
+	}
+	out := make(map[string]int64, len(net))
+	for o, v := range net {
+		out[o] = int64(math.Round(v * 100))
+	}
+	return out, nil
 }
 
 // parseCSV reads a Play report: UTF-16 (with BOM) or UTF-8, first row is the header.

@@ -2,6 +2,9 @@ package ads
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,11 +45,29 @@ func (m *Meta) AuthURL(state, redirect string) string {
 	return m.Dialog + "?" + q.Encode()
 }
 
+// proof adds appsecret_proof next to an access token, so a leaked token is useless without the app secret
+// (turn on "Require App Secret" in the Meta app's advanced settings).
+func (m *Meta) proof(q url.Values) {
+	if tok := q.Get("access_token"); tok != "" && q.Get("appsecret_proof") == "" && m.AppSecret != "" {
+		h := hmac.New(sha256.New, []byte(m.AppSecret))
+		h.Write([]byte(tok))
+		q.Set("appsecret_proof", hex.EncodeToString(h.Sum(nil)))
+	}
+}
+
 func (m *Meta) get(ctx context.Context, path string, q url.Values, out any) error {
 	u := path
-	if !strings.HasPrefix(path, "https://") {
+	if strings.HasPrefix(path, "https://") { // a paging link Meta returned
+		if pu, err := url.Parse(path); err == nil {
+			pq := pu.Query()
+			m.proof(pq)
+			pu.RawQuery = pq.Encode()
+			u = pu.String()
+		}
+	} else {
 		u = m.Graph + "/" + strings.TrimPrefix(path, "/")
 		if q != nil {
+			m.proof(q)
 			u += "?" + q.Encode()
 		}
 	}
@@ -55,6 +76,7 @@ func (m *Meta) get(ctx context.Context, path string, q url.Values, out any) erro
 
 func (m *Meta) post(ctx context.Context, t Token, path string, form url.Values, out any) error {
 	form.Set("access_token", t.Access)
+	m.proof(form)
 	return m.h.do(ctx, "Meta", "POST", m.Graph+"/"+strings.TrimPrefix(path, "/"), nil, form, out)
 }
 

@@ -103,7 +103,8 @@ func run() error {
 	if port == "" {
 		port = "8080"
 	}
-	hs := &http.Server{Addr: ":" + port, Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	hs := &http.Server{Addr: ":" + port, Handler: h, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
+		WriteTimeout: 3 * time.Minute, IdleTimeout: 2 * time.Minute} // write allows a full integrations sync
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
