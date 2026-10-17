@@ -406,6 +406,9 @@ fun SettingsScreen(nav: Nav, modifier: Modifier, onSaved: () -> Unit) {
                         )
                     }
                 },
+                supportingText = if (token.isEmpty() && settings.hasToken) {
+                    { Text("Saved and locked to your fingerprint. Type it again only to change it.") }
+                } else null,
                 modifier = Modifier.fillMaxWidth(),
             )
         }

@@ -1,6 +1,10 @@
 package com.vikash.ampli.owner.data
 
+import android.app.KeyguardManager
 import android.content.Context
+import android.os.Build
+import android.security.keystore.KeyPermanentlyInvalidatedException
+import android.security.keystore.UserNotAuthenticatedException
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -632,48 +636,74 @@ class RemoteRepo(baseUrl: String, private val token: String) : Repo {
 /**
  * Encrypts small secrets with an AES-256-GCM key that lives in the Android Keystore,
  * so the key never leaves the phone's secure hardware and a copied prefs file is useless.
+ *
+ * Two keys: [PLAIN] works any time; [BOUND] (Android 11+, used while the app lock is on) only works for five
+ * minutes after the owner unlocks with fingerprint, face or the screen lock, and Android destroys it when a new
+ * fingerprint is added or the screen lock is removed, so a token sealed with it can't be read by someone who
+ * only has the phone unlocked.
  */
 private object TokenVault {
-    private const val ALIAS = "ampli_owner_token_key"
+    const val PLAIN = "ampli_owner_token_key"
+    const val BOUND = "ampli_owner_token_key_v2"
     private const val TRANSFORM = "AES/GCM/NoPadding"
+    const val AUTH_SECONDS = 300
 
-    private fun key(): SecretKey {
+    private fun key(alias: String): SecretKey {
         val ks = KeyStore.getInstance("AndroidKeyStore")
         ks.load(null)
-        val existing = ks.getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry
+        val existing = ks.getEntry(alias, null) as? KeyStore.SecretKeyEntry
         if (existing != null) return existing.secretKey
+        val spec = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256)
+        if (alias == BOUND && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            spec.setUserAuthenticationRequired(true)
+                .setUserAuthenticationParameters(AUTH_SECONDS, KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL)
+                .setInvalidatedByBiometricEnrollment(true)
+        }
         val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
-        gen.init(
-            KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(256)
-                .build(),
-        )
+        gen.init(spec.build())
         return gen.generateKey()
     }
 
+    /** Drops a key Android invalidated, so the next save makes a fresh one. */
+    fun forget(alias: String) {
+        runCatching { KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(alias) }
+    }
+
     /** "iv:ciphertext", both Base64. */
-    fun encrypt(plain: String): String {
+    fun encrypt(plain: String, alias: String = PLAIN): String {
         val cipher = Cipher.getInstance(TRANSFORM)
-        cipher.init(Cipher.ENCRYPT_MODE, key())
+        cipher.init(Cipher.ENCRYPT_MODE, key(alias))
         val ct = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
         return Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(ct, Base64.NO_WRAP)
     }
 
-    fun decrypt(stored: String): String {
+    fun decrypt(stored: String, alias: String = PLAIN): String {
         val parts = stored.split(":")
-        if (parts.size != 2) return ""
+        if (parts.size != 2) throw IllegalArgumentException("bad token format")
         val iv = Base64.decode(parts[0], Base64.NO_WRAP)
         val ct = Base64.decode(parts[1], Base64.NO_WRAP)
         val cipher = Cipher.getInstance(TRANSFORM)
-        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
+        cipher.init(Cipher.DECRYPT_MODE, key(alias), GCMParameterSpec(128, iv))
         return String(cipher.doFinal(ct), Charsets.UTF_8)
     }
 }
 
+/** What reading the saved owner token gave. */
+sealed interface TokenRead {
+    data class Ok(val token: String) : TokenRead
+    /** No token saved: phone-only mode. */
+    data object None : TokenRead
+    /** Sealed with the fingerprint-bound key and the owner hasn't unlocked in the last five minutes. */
+    data object Locked : TokenRead
+    /** Can't be read any more (new fingerprint, screen lock removed, phone restored): it has to be entered again. */
+    data object Unreadable : TokenRead
+}
+
 /** Server address, owner token (encrypted with a Keystore key) and the lock switch, in private app prefs. */
-class Settings(context: Context) {
+class Settings(private val context: Context) {
     private val prefs = context.getSharedPreferences("owner", Context.MODE_PRIVATE)
 
     init {
@@ -681,7 +711,7 @@ class Settings(context: Context) {
         val plain = prefs.getString("token", null)
         if (plain != null) {
             val ok = plain.isBlank() || runCatching {
-                prefs.edit().putString("token_enc", TokenVault.encrypt(plain.trim())).commit()
+                prefs.edit().putString("token_enc", TokenVault.encrypt(plain.trim())).putString("token_key", "v1").commit()
             }.getOrDefault(false)
             if (ok) prefs.edit().remove("token").commit()
         }
@@ -691,23 +721,76 @@ class Settings(context: Context) {
         get() = prefs.getString("server_url", "") ?: ""
         set(v) = prefs.edit().putString("server_url", v.trim()).apply()
 
-    var token: String
-        get() {
-            prefs.getString("token", null)?.let { return it } // migration failed: keep working
-            val enc = prefs.getString("token_enc", null) ?: return ""
-            return runCatching { TokenVault.decrypt(enc) }.getOrDefault("")
+    /** True when a token is saved, without decrypting it (so the lock check never needs the key). */
+    val hasToken: Boolean
+        get() = !prefs.getString("token", null).isNullOrBlank() || prefs.getString("token_enc", null) != null
+
+    /** True when the saved token is sealed with the fingerprint-bound key. */
+    val tokenBound: Boolean
+        get() = prefs.getString("token_enc", null) != null && prefs.getString("token_key", "v1") == "v2"
+
+    fun readToken(): TokenRead {
+        prefs.getString("token", null)?.takeIf { it.isNotBlank() }?.let { return TokenRead.Ok(it) } // migration failed: keep working
+        val enc = prefs.getString("token_enc", null) ?: return TokenRead.None
+        val alias = if (tokenBound) TokenVault.BOUND else TokenVault.PLAIN
+        return try {
+            TokenRead.Ok(TokenVault.decrypt(enc, alias))
+        } catch (e: UserNotAuthenticatedException) {
+            TokenRead.Locked
+        } catch (e: KeyPermanentlyInvalidatedException) {
+            TokenVault.forget(alias)
+            TokenRead.Unreadable
+        } catch (e: Exception) {
+            TokenRead.Unreadable
         }
+    }
+
+    /** The token, or "" when there is none or it can't be read right now. */
+    var token: String
+        get() = (readToken() as? TokenRead.Ok)?.token ?: ""
         set(v) {
             val t = v.trim()
             if (t.isEmpty()) {
-                prefs.edit().remove("token_enc").remove("token").apply()
+                prefs.edit().remove("token_enc").remove("token").remove("token_key").apply()
             } else {
-                prefs.edit().putString("token_enc", TokenVault.encrypt(t)).remove("token").apply()
+                seal(t)
             }
         }
+
+    /** Uses the bound key when the lock is on and this phone can do it; falls back to the plain key outside the unlock window. */
+    private fun seal(t: String) {
+        if (wantBound()) {
+            val enc = runCatching { TokenVault.encrypt(t, TokenVault.BOUND) }
+                .onFailure { if (it is KeyPermanentlyInvalidatedException) TokenVault.forget(TokenVault.BOUND) }
+                .getOrNull()
+            if (enc != null) {
+                prefs.edit().putString("token_enc", enc).putString("token_key", "v2").remove("token").apply()
+                return
+            }
+        }
+        prefs.edit().putString("token_enc", TokenVault.encrypt(t)).putString("token_key", "v1").remove("token").apply()
+    }
+
+    private fun wantBound(): Boolean {
+        if (!lock || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
+        val km = context.getSystemService(KeyguardManager::class.java) ?: return false
+        return km.isDeviceSecure
+    }
+
+    /**
+     * Right after an unlock: re-seals the token with the key that matches the lock switch
+     * (bound while the lock is on, plain once it's off). Does nothing if it can't be read.
+     */
+    fun settleKey() {
+        val r = readToken() as? TokenRead.Ok ?: return
+        if (wantBound() != tokenBound) seal(r.token)
+    }
 
     /** Ask for fingerprint, face or the screen lock before showing server data. On by default. */
     var lock: Boolean
         get() = prefs.getBoolean("lock", true)
-        set(v) = prefs.edit().putBoolean("lock", v).apply()
+        set(v) {
+            prefs.edit().putBoolean("lock", v).commit()
+            settleKey()
+        }
 }
